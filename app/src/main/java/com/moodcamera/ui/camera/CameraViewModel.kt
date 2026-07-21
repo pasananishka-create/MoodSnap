@@ -26,6 +26,8 @@ import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.QualityType
 import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
+import com.moodcamera.processing.enhance.AiEnhancer
+import com.moodcamera.processing.enhance.HdEnhancer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -183,11 +185,25 @@ class CameraViewModel @Inject constructor(
                 }
 
                 val settings = _uiState.value.settings
-                val processedBitmap = ImageProcessor.processImage(
+                var processedBitmap = ImageProcessor.processImage(
                     original = originalBitmap,
                     settings = settings,
                     quality = settings.qualityType
                 )
+
+                if (settings.isAiEnhanceEnabled && AiEnhancer.isReady()) {
+                    val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                    if (aiResult !== processedBitmap) {
+                        processedBitmap.recycle()
+                        processedBitmap = aiResult
+                    }
+                } else if (settings.isHdEnabled) {
+                    val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                    if (hdResult !== processedBitmap) {
+                        processedBitmap.recycle()
+                        processedBitmap = hdResult
+                    }
+                }
 
                 val processedFile = photoRepository.createPhotoFile()
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, processedFile.outputStream())
@@ -405,6 +421,10 @@ class CameraViewModel @Inject constructor(
 
     fun updateHdIntensity(value: Float) {
         _uiState.update { it.copy(settings = it.settings.copy(hdIntensity = value)) }
+    }
+
+    fun toggleAiEnhance() {
+        _uiState.update { it.copy(settings = it.settings.copy(isAiEnhanceEnabled = !it.settings.isAiEnhanceEnabled)) }
     }
 
     fun clearError() {

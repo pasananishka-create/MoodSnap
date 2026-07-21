@@ -11,6 +11,7 @@ data class CameraSettings(
     val lutIntensity: Float = 0.7f,
     val isHdEnabled: Boolean = true,
     val hdIntensity: Float = 0.6f,
+    val isAiEnhanceEnabled: Boolean = true,
     val exposureCompensation: Float = 0f,
     val contrast: Float = 1.0f,
     val brightness: Float = 0.0f,

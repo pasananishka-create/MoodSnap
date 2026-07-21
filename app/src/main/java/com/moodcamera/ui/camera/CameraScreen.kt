@@ -306,6 +306,7 @@ fun CameraScreen(
                 onLutIntensityChange = { viewModel.updateLutIntensity(it) },
                 onHdToggle = { viewModel.toggleHd() },
                 onHdIntensityChange = { viewModel.updateHdIntensity(it) },
+                onAiEnhanceToggle = { viewModel.toggleAiEnhance() },
                 onDismiss = { showAdjustPanel = false }
             )
         }
@@ -524,6 +525,7 @@ private fun SettingsPanel(
     onLutIntensityChange: (Float) -> Unit,
     onHdToggle: () -> Unit,
     onHdIntensityChange: (Float) -> Unit,
+    onAiEnhanceToggle: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Column(
@@ -620,15 +622,44 @@ private fun SettingsPanel(
 
         // HD Enhancement section
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("HD Enhancement", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text("Enhancement", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ToggleChip("HD On", uiState.settings.isHdEnabled, onHdToggle, Modifier.weight(1f))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (uiState.settings.isAiEnhanceEnabled) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+                    .border(0.5.dp, if (uiState.settings.isAiEnhanceEnabled) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(10.dp))
+                    .clickable { onAiEnhanceToggle() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("AI Enhance", color = if (uiState.settings.isAiEnhanceEnabled) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("ESRGAN Neural Net", color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (uiState.settings.isHdEnabled && !uiState.settings.isAiEnhanceEnabled) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+                    .border(0.5.dp, if (uiState.settings.isHdEnabled && !uiState.settings.isAiEnhanceEnabled) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(10.dp))
+                    .clickable { onHdToggle() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Classic HD", color = if (uiState.settings.isHdEnabled && !uiState.settings.isAiEnhanceEnabled) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Sharpen + Contrast", color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
+                }
+            }
         }
-        if (uiState.settings.isHdEnabled) {
+        if (uiState.settings.isHdEnabled || uiState.settings.isAiEnhanceEnabled) {
             Spacer(modifier = Modifier.height(4.dp))
-            SettingsSlider("HD Strength", uiState.settings.hdIntensity, 0f..1f, onHdIntensityChange)
+            SettingsSlider("Strength", uiState.settings.hdIntensity, 0f..1f, onHdIntensityChange)
         }
 
         Spacer(modifier = Modifier.height(4.dp))

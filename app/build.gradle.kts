@@ -93,4 +93,8 @@ dependencies {
 
     // Coil
     implementation(libs.coil.compose)
+
+    // TensorFlow Lite - AI Super Resolution
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
 }
