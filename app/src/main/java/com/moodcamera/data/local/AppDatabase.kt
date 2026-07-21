@@ -56,7 +56,7 @@ abstract class AppDatabase : RoomDatabase() {
                 PresetEntity(name = "Ektar", emulationType = "EKTAR", saturation = 1.3f, contrast = 1.1f, isBuiltIn = true),
                 PresetEntity(name = "Fuji 400H", emulationType = "FUJI_400H", saturation = 0.8f, fade = 0.2f, isBuiltIn = true),
                 PresetEntity(name = "Velvia", emulationType = "VELVIA", saturation = 1.4f, contrast = 1.2f, isBuiltIn = true),
-                PresetEntity(name = "Provia", emulationType = "PROVIA", isBuiltIn = true),
+                PresetEntity(name = "Clarendon", emulationType = "CLARENDON", isBuiltIn = true),
                 PresetEntity(name = "Tri-X", emulationType = "TRI_X", saturation = 0f, contrast = 1.3f, isBuiltIn = true),
                 PresetEntity(name = "HP5+", emulationType = "HP5", saturation = 0f, grainIntensity = 0.7f, isBuiltIn = true),
                 PresetEntity(name = "Arizona", emulationType = "ARIZONA", temperature = 0.3f, saturation = 1.1f, isBuiltIn = true),

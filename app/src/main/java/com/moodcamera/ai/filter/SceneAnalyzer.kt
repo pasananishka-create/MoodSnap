@@ -110,7 +110,7 @@ class SceneAnalyzer @Inject constructor(
             isLandscape -> EmulationType.VELVIA
             isUrban -> EmulationType.METRO
             isIndoor -> EmulationType.ARIZONA
-            else -> EmulationType.PROVIA
+            else -> EmulationType.CLARENDON
         }
     }
 

@@ -75,31 +75,45 @@ import com.moodcamera.ui.theme.MoodSurface
 import com.moodcamera.ui.theme.MoodSurfaceVariant
 
 private fun EmulationType.overlayColor(): Color = when (this) {
+    // Instagram - strong tints
+    EmulationType.CLARENDON -> Color(0x20FF9966)
+    EmulationType.JUNO -> Color(0x20FFAA33)
+    EmulationType.LARK -> Color(0x1888DDAA)
+    EmulationType.VALENCIA -> Color(0x20DD8844)
+    EmulationType.HUDSON -> Color(0x204488CC)
+    EmulationType.REYES -> Color(0x25CCBB99)
+    // Filmic
     EmulationType.PORTRA -> Color(0x18FFB38A)
-    EmulationType.CINESTILL_800T -> Color(0x182244AA)
-    EmulationType.EKTAR -> Color(0x18FF4444)
-    EmulationType.FUJI_400H -> Color(0x1888CCBB)
-    EmulationType.VELVIA -> Color(0x18FF8800)
-    EmulationType.PROVIA -> Color(0x108899BB)
-    EmulationType.TRI_X -> Color(0x35808080)
-    EmulationType.HP5 -> Color(0x28787878)
-    EmulationType.ARIZONA -> Color(0x18DD9944)
-    EmulationType.METRO -> Color(0x184466AA)
-    EmulationType.GOLD_200 -> Color(0x18DDAA33)
+    EmulationType.GOLD_200 -> Color(0x20DDAA33)
     EmulationType.ULTRAMAX -> Color(0x18DD6644)
-    EmulationType.KODACHROME -> Color(0x18CC8822)
+    EmulationType.FUJI_400H -> Color(0x1588CCBB)
+    EmulationType.FILM35 -> Color(0x18DD9955)
+    // Cinematic
+    EmulationType.CINESTILL_800T -> Color(0x202244AA)
+    EmulationType.KODACHROME -> Color(0x20CC8822)
     EmulationType.EKTACHROME -> Color(0x184488CC)
-    EmulationType.CINESTILL_50D -> Color(0x154477AA)
-    EmulationType.PORTRA_160 -> Color(0x15FFCCA0)
-    EmulationType.FUJI_C200 -> Color(0x1588BB88)
-    EmulationType.AGFA_VISTA -> Color(0x18FF3366)
+    EmulationType.CINEMATIC_TEAL_ORANGE -> Color(0x222288AA)
+    EmulationType.NIGHTFADE -> Color(0x202244BB)
+    EmulationType.ROSEWOOD -> Color(0x20AA4466)
+    EmulationType.AGFA_VISTA -> Color(0x20FF3366)
+    // Natural
+    EmulationType.VELVIA -> Color(0x18FF8800)
+    // Stylistic
+    EmulationType.TRI_X -> Color(0x38808080)
+    EmulationType.HP5 -> Color(0x28787878)
+    EmulationType.ARIZONA -> Color(0x20DD9944)
+    EmulationType.METRO -> Color(0x184466AA)
+    EmulationType.EKTAR -> Color(0x18FF4444)
 }
 
 private fun EmulationType.overlayBlendColor(): Color = when (this) {
-    EmulationType.TRI_X -> Color(0x22000000)
-    EmulationType.HP5 -> Color(0x18000000)
+    EmulationType.TRI_X -> Color(0x28000000)
+    EmulationType.HP5 -> Color(0x20000000)
+    EmulationType.NIGHTFADE -> Color(0x18000022)
+    EmulationType.CINESTILL_800T -> Color(0x15000033)
+    EmulationType.HUDSON -> Color(0x12000022)
+    EmulationType.REYES -> Color(0x15000000)
     EmulationType.METRO -> Color(0x12000033)
-    EmulationType.CINESTILL_800T -> Color(0x12000044)
     else -> Color.Transparent
 }
 
