@@ -192,10 +192,20 @@ class CameraViewModel @Inject constructor(
                 )
 
                 if (settings.isAiEnhanceEnabled && AiEnhancer.isReady()) {
-                    val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                    if (aiResult !== processedBitmap) {
-                        processedBitmap.recycle()
-                        processedBitmap = aiResult
+                    try {
+                        val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                        if (aiResult !== processedBitmap) {
+                            processedBitmap.recycle()
+                            processedBitmap = aiResult
+                        }
+                    } catch (_: Exception) {
+                        if (settings.isHdEnabled) {
+                            val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                            if (hdResult !== processedBitmap) {
+                                processedBitmap.recycle()
+                                processedBitmap = hdResult
+                            }
+                        }
                     }
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
