@@ -157,28 +157,18 @@ fun CameraScreen(
 
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
         viewModel.startCamera(lifecycleOwner, previewView)
-    }
-
-    LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
-        kotlinx.coroutines.delay(800)
-        while (true) {
-            try {
-                val bmp = previewView.bitmap
-                if (bmp != null && bmp.width > 0 && bmp.height > 0) {
-                    val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
-                    val old = cachedSourceBitmap
-                    cachedSourceBitmap = src
-                    if (old != null && old !== src) old.recycle()
-                    val processed = withContext(Dispatchers.Default) {
-                        PreviewProcessor.processPreview(src, uiState.settings)
-                    }
-                    val oldResult = livePreviewBitmap
-                    livePreviewBitmap = processed
-                    if (oldResult != null && oldResult !== processed) oldResult.recycle()
+        kotlinx.coroutines.delay(600)
+        try {
+            val bmp = previewView.bitmap
+            if (bmp != null && bmp.width > 0 && bmp.height > 0) {
+                val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
+                cachedSourceBitmap = src
+                val processed = withContext(Dispatchers.Default) {
+                    PreviewProcessor.processPreview(src, uiState.settings)
                 }
-            } catch (_: Exception) {}
-            kotlinx.coroutines.delay(1500)
-        }
+                livePreviewBitmap = processed
+            }
+        } catch (_: Exception) {}
     }
 
     LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {

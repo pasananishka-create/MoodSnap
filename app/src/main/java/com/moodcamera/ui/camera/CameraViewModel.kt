@@ -1,14 +1,14 @@
 package com.moodcamera.ui.camera
 
 import android.app.Application
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.provider.MediaStore
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -26,7 +26,6 @@ import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.QualityType
 import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
-import com.moodcamera.processing.engine.PreviewProcessor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,8 +35,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import java.text.SimpleDateFormat
+import java.util.Locale
 import javax.inject.Inject
 
 data class CameraUiState(
@@ -70,11 +69,6 @@ class CameraViewModel @Inject constructor(
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var imageAnalysis: ImageAnalysis? = null
-    private val analysisExecutor = Executors.newSingleThreadExecutor()
-    private val isAnalyzing = AtomicBoolean(false)
-    private var lastAnalysisTime = 0L
-    private val analysisIntervalMs = 3000L
 
     init {
         viewModelScope.launch {
@@ -92,49 +86,11 @@ class CameraViewModel @Inject constructor(
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
 
-        imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(android.util.Size(480, 640))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-            .also { analysis ->
-                analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                    processAnalysisFrame(imageProxy)
-                }
-            }
-
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
             bindCamera(lifecycleOwner, preview, previewView)
         }, ContextCompat.getMainExecutor(context))
-    }
-
-    private fun processAnalysisFrame(imageProxy: ImageProxy) {
-        if (!_uiState.value.settings.isAutoFilterEnabled || isAnalyzing.get()) {
-            imageProxy.close()
-            return
-        }
-
-        val now = System.currentTimeMillis()
-        if (now - lastAnalysisTime < analysisIntervalMs) {
-            imageProxy.close()
-            return
-        }
-
-        isAnalyzing.set(true)
-        lastAnalysisTime = now
-
-        try {
-            val bitmap = imageProxy.toBitmap()
-            if (bitmap != null) {
-                val scaled = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
-                analyzeScene(scaled)
-            }
-        } catch (_: Exception) {
-        } finally {
-            isAnalyzing.set(false)
-            imageProxy.close()
-        }
     }
 
     private fun bindCamera(
@@ -144,7 +100,6 @@ class CameraViewModel @Inject constructor(
     ) {
         val provider = cameraProvider ?: return
         val capture = imageCapture ?: return
-        val analysis = imageAnalysis
 
         val cameraSelector = if (_uiState.value.settings.isFrontCamera) {
             CameraSelector.DEFAULT_FRONT_CAMERA
@@ -155,15 +110,11 @@ class CameraViewModel @Inject constructor(
         try {
             provider.unbindAll()
             preview.setSurfaceProvider(previewView.surfaceProvider)
-            val useCases = if (analysis != null) {
-                arrayOf(preview, capture, analysis)
-            } else {
-                arrayOf(preview, capture)
-            }
             camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                *useCases
+                preview,
+                capture
             )
 
             camera?.let { cam ->
@@ -250,6 +201,8 @@ class CameraViewModel @Inject constructor(
                 )
                 photoRepository.insertPhoto(photoEntity)
 
+                saveToGallery(processedBitmap)
+
                 originalBitmap.recycle()
                 processedBitmap.recycle()
                 File(tempPath).delete()
@@ -271,6 +224,37 @@ class CameraViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    private fun saveToGallery(bitmap: Bitmap) {
+        val context = getApplication<Application>()
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+        val filename = "MoodSnap_${timestamp}.jpg"
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MoodSnap")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+
+        uri?.let {
+            try {
+                resolver.openOutputStream(it)?.use { stream ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    resolver.update(it, contentValues, null, null)
+                }
+            } catch (_: Exception) {}
         }
     }
 
@@ -384,7 +368,7 @@ class CameraViewModel @Inject constructor(
                 settings = it.settings.copy(isAutoFilterEnabled = newState),
                 sceneInfo = if (!newState) null else it.sceneInfo,
                 showSceneInfo = false,
-                autoFilterStatus = if (newState) "AI Active - analyzing..." else null
+                autoFilterStatus = if (newState) "AI Active" else null
             )
         }
     }
@@ -430,6 +414,5 @@ class CameraViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         sceneAnalyzer.close()
-        analysisExecutor.shutdown()
     }
 }
