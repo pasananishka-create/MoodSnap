@@ -1,0 +1,342 @@
+package com.moodcamera.ui.camera
+
+import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.viewModelScope
+import com.moodcamera.ai.filter.SceneAnalyzer
+import com.moodcamera.data.model.PhotoEntity
+import com.moodcamera.data.repository.PhotoRepository
+import com.moodcamera.data.repository.PresetRepository
+import com.moodcamera.domain.model.AspectRatio
+import com.moodcamera.domain.model.CameraSettings
+import com.moodcamera.domain.model.EmulationType
+import com.moodcamera.domain.model.QualityType
+import com.moodcamera.domain.model.SceneInfo
+import com.moodcamera.processing.engine.ImageProcessor
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+data class CameraUiState(
+    val settings: CameraSettings = CameraSettings(),
+    val isCapturing: Boolean = false,
+    val isProcessing: Boolean = false,
+    val lastPhotoPath: String? = null,
+    val sceneInfo: SceneInfo? = null,
+    val showSceneInfo: Boolean = false,
+    val availableZoomLevels: List<Float> = emptyList(),
+    val currentZoom: Float = 1f,
+    val hasFlashUnit: Boolean = false,
+    val flashEnabled: Boolean = false,
+    val photoCount: Int = 0,
+    val errorMessage: String? = null
+)
+
+@HiltViewModel
+class CameraViewModel @Inject constructor(
+    application: Application,
+    private val photoRepository: PhotoRepository,
+    private val presetRepository: PresetRepository,
+    private val sceneAnalyzer: SceneAnalyzer
+) : AndroidViewModel(application) {
+
+    private val _uiState = MutableStateFlow(CameraUiState())
+    val uiState: StateFlow<CameraUiState> = _uiState.asStateFlow()
+
+    private var camera: Camera? = null
+    private var imageCapture: ImageCapture? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+
+    init {
+        viewModelScope.launch {
+            photoRepository.getPhotoCount().collect { count ->
+                _uiState.update { it.copy(photoCount = count) }
+            }
+        }
+    }
+
+    fun startCamera(
+        lifecycleOwner: LifecycleOwner,
+        preview: Preview,
+        onSurfaceProviderReady: (Preview.SurfaceProvider) -> Unit
+    ) {
+        val context = getApplication<Application>()
+
+        preview.setSurfaceProvider { surfaceRequest ->
+            onSurfaceProviderReady(surfaceRequest)
+        }
+
+        imageCapture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            cameraProvider = cameraProviderFuture.get()
+            bindCamera(lifecycleOwner, preview)
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    private fun bindCamera(lifecycleOwner: LifecycleOwner, preview: Preview) {
+        val provider = cameraProvider ?: return
+        val capture = imageCapture ?: return
+
+        val cameraSelector = if (_uiState.value.settings.isFrontCamera) {
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        } else {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        }
+
+        try {
+            provider.unbindAll()
+            camera = provider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                preview,
+                capture
+            )
+
+            camera?.let { cam ->
+                _uiState.update {
+                    it.copy(
+                        hasFlashUnit = cam.cameraInfo.hasFlashUnit(),
+                        currentZoom = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f,
+                        availableZoomLevels = computeZoomLevels(cam)
+                    )
+                }
+
+                cam.cameraInfo.zoomState.observeForever { zoomState ->
+                    _uiState.update { it.copy(currentZoom = zoomState.zoomRatio) }
+                }
+            }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Camera bind failed: ${e.message}") }
+        }
+    }
+
+    private fun computeZoomLevels(cam: Camera): List<Float> {
+        val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+        val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+        val levels = mutableListOf<Float>()
+        var zoom = minZoom
+        while (zoom <= maxZoom) {
+            levels.add(zoom)
+            zoom *= 2f
+        }
+        if (levels.lastOrNull() != maxZoom) levels.add(maxZoom)
+        return levels
+    }
+
+    fun takePhoto() {
+        val capture = imageCapture ?: return
+        if (_uiState.value.isCapturing) return
+
+        _uiState.update { it.copy(isCapturing = true) }
+
+        val tempFile = photoRepository.createTempPhotoFile()
+
+        val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
+
+        capture.takePicture(
+            outputOptions,
+            ContextCompat.getMainExecutor(getApplication()),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    viewModelScope.launch {
+                        processAndSavePhoto(tempFile.absolutePath)
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    _uiState.update {
+                        it.copy(
+                            isCapturing = false,
+                            errorMessage = "Capture failed: ${exception.message}"
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    private suspend fun processAndSavePhoto(tempPath: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                _uiState.update { it.copy(isProcessing = true) }
+
+                val originalBitmap = BitmapFactory.decodeFile(tempPath) ?: run {
+                    _uiState.update {
+                        it.copy(isCapturing = false, isProcessing = false, errorMessage = "Failed to decode image")
+                    }
+                    return@withContext
+                }
+
+                val settings = _uiState.value.settings
+
+                val processedBitmap = ImageProcessor.processImage(
+                    original = originalBitmap,
+                    settings = settings,
+                    quality = settings.qualityType
+                )
+
+                val processedFile = photoRepository.createPhotoFile()
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, processedFile.outputStream())
+
+                val originalFile = photoRepository.createPhotoFile()
+                originalBitmap.compress(Bitmap.CompressFormat.JPEG, 95, originalFile.outputStream())
+
+                val photoEntity = PhotoEntity(
+                    filePath = processedFile.absolutePath,
+                    originalFilePath = originalFile.absolutePath,
+                    presetName = settings.getPresetName(),
+                    width = processedBitmap.width,
+                    height = processedBitmap.height
+                )
+                photoRepository.insertPhoto(photoEntity)
+
+                originalBitmap.recycle()
+                processedBitmap.recycle()
+
+                _uiState.update {
+                    it.copy(
+                        isCapturing = false,
+                        isProcessing = false,
+                        lastPhotoPath = processedFile.absolutePath
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isCapturing = false,
+                        isProcessing = false,
+                        errorMessage = "Processing failed: ${e.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun analyzeScene(bitmap: Bitmap) {
+        if (!_uiState.value.settings.isAutoFilterEnabled) return
+
+        viewModelScope.launch {
+            try {
+                val sceneInfo = sceneAnalyzer.analyzeScene(bitmap)
+                _uiState.update {
+                    it.copy(
+                        sceneInfo = sceneInfo,
+                        showSceneInfo = true
+                    )
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun applyAutoFilter() {
+        val sceneInfo = _uiState.value.sceneInfo ?: return
+        _uiState.update {
+            it.copy(
+                settings = it.settings.copy(
+                    emulationType = sceneInfo.recommendedEmulation
+                ),
+                showSceneInfo = false
+            )
+        }
+    }
+
+    fun dismissSceneInfo() {
+        _uiState.update { it.copy(showSceneInfo = false) }
+    }
+
+    fun updateEmulation(type: EmulationType) {
+        _uiState.update {
+            it.copy(settings = it.settings.copy(emulationType = type))
+        }
+    }
+
+    fun updateExposure(value: Float) {
+        camera?.cameraControl?.setExposureCompensationIndex(value.toInt())
+        _uiState.update {
+            it.copy(settings = it.settings.copy(exposureCompensation = value))
+        }
+    }
+
+    fun toggleFlash() {
+        val newState = !_uiState.value.flashEnabled
+        camera?.cameraControl?.enableTorch(newState)
+        _uiState.update { it.copy(flashEnabled = newState) }
+    }
+
+    fun cycleZoom() {
+        val levels = _uiState.value.availableZoomLevels
+        if (levels.isEmpty()) return
+
+        val current = _uiState.value.currentZoom
+        val currentIndex = levels.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
+        val nextIndex = if (currentIndex >= 0 && currentIndex < levels.size - 1) {
+            currentIndex + 1
+        } else 0
+
+        camera?.cameraControl?.setZoomRatio(levels[nextIndex])
+    }
+
+    fun toggleFrontCamera() {
+        val newFront = !_uiState.value.settings.isFrontCamera
+        _uiState.update {
+            it.copy(settings = it.settings.copy(isFrontCamera = newFront))
+        }
+    }
+
+    fun toggleAutoFilter() {
+        val newState = !_uiState.value.settings.isAutoFilterEnabled
+        _uiState.update {
+            it.copy(
+                settings = it.settings.copy(isAutoFilterEnabled = newState),
+                sceneInfo = if (!newState) null else it.sceneInfo,
+                showSceneInfo = false
+            )
+        }
+    }
+
+    fun toggleGrid() {
+        val newState = !_uiState.value.settings.isGridEnabled
+        _uiState.update {
+            it.copy(settings = it.settings.copy(isGridEnabled = newState))
+        }
+    }
+
+    fun updateAspectRatio(ratio: AspectRatio) {
+        _uiState.update {
+            it.copy(settings = it.settings.copy(aspectRatio = ratio))
+        }
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        sceneAnalyzer.close()
+    }
+}
