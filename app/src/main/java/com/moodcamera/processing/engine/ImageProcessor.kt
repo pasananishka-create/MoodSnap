@@ -12,6 +12,9 @@ import com.moodcamera.domain.model.QualityType
 import com.moodcamera.domain.model.ToneType
 import com.moodcamera.processing.grain.FilmGrain
 import com.moodcamera.processing.halation.HalationEffect
+import com.moodcamera.processing.enhance.CinematicLut
+import com.moodcamera.processing.enhance.CinematicLutEngine
+import com.moodcamera.processing.enhance.HdEnhancer
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -48,6 +51,12 @@ object ImageProcessor {
         applyEmulation(pixels, settings.emulationType)
         applyTone(pixels, settings.toneType)
         if (settings.fade > 0f) applyFade(pixels, settings.fade)
+
+        // Apply cinematic LUT if selected
+        settings.cinematicLut?.let { lut ->
+            applyCinematicLut(pixels, lut, settings.lutIntensity)
+        }
+
         src.setPixels(pixels, 0, width, 0, 0, width, height)
 
         var result = src
@@ -70,6 +79,14 @@ object ImageProcessor {
             if (v !== result) result.recycle()
             result = v
         }
+
+        // HD Enhancement pipeline (applied last for maximum quality)
+        if (settings.isHdEnabled && settings.hdIntensity > 0f) {
+            val hd = HdEnhancer.enhance(result, settings.hdIntensity)
+            if (hd !== result) result.recycle()
+            result = hd
+        }
+
         return result
     }
 
@@ -434,6 +451,29 @@ object ImageProcessor {
         val nb = clamp(b * 1.18f + 0.1f)
         splitTone(sCurve(nr, 0.3f), sCurve(ng, 0.25f), sCurve(nb, 0.35f),
             Triple(-0.1f, 0.1f, 0.4f), Triple(0f, 0f, 0.15f))
+    }
+
+    // ── Cinematic LUT application ──────────────────────────────────
+
+    private fun applyCinematicLut(pixels: IntArray, lut: CinematicLut, intensity: Float) {
+        for (i in pixels.indices) {
+            val px = pixels[i]
+            val r = Color.red(px) / 255f
+            val g = Color.green(px) / 255f
+            val b = Color.blue(px) / 255f
+
+            val (lr, lg, lb) = CinematicLutEngine.applyLut(r, g, b, lut)
+            val nr = r + (lr - r) * intensity
+            val ng = g + (lg - g) * intensity
+            val nb = b + (lb - b) * intensity
+
+            pixels[i] = Color.argb(
+                Color.alpha(px),
+                (nr * 255).roundToInt().coerceIn(0, 255),
+                (ng * 255).roundToInt().coerceIn(0, 255),
+                (nb * 255).roundToInt().coerceIn(0, 255)
+            )
+        }
     }
 
     // ── Tone curves ────────────────────────────────────────────────

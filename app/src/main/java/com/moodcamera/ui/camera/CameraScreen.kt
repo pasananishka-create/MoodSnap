@@ -81,6 +81,7 @@ import com.moodcamera.domain.model.AspectRatio
 import com.moodcamera.domain.model.EmulationCategory
 import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.ToneType
+import com.moodcamera.processing.enhance.CinematicLut
 import com.moodcamera.ui.theme.MoodAccent
 import com.moodcamera.ui.theme.MoodBlack
 import com.moodcamera.ui.theme.MoodOnSurfaceVariant
@@ -266,6 +267,10 @@ fun CameraScreen(
                 onHalationChange = { viewModel.updateHalationIntensity(it) },
                 onGrainToggle = { viewModel.toggleGrain() },
                 onHalationToggle = { viewModel.toggleHalation() },
+                onLutSelect = { viewModel.updateCinematicLut(it) },
+                onLutIntensityChange = { viewModel.updateLutIntensity(it) },
+                onHdToggle = { viewModel.toggleHd() },
+                onHdIntensityChange = { viewModel.updateHdIntensity(it) },
                 onDismiss = { showAdjustPanel = false }
             )
         }
@@ -480,6 +485,10 @@ private fun SettingsPanel(
     onHalationChange: (Float) -> Unit,
     onGrainToggle: () -> Unit,
     onHalationToggle: () -> Unit,
+    onLutSelect: (CinematicLut?) -> Unit,
+    onLutIntensityChange: (Float) -> Unit,
+    onHdToggle: () -> Unit,
+    onHdIntensityChange: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     Column(
@@ -526,6 +535,67 @@ private fun SettingsPanel(
             ToggleChip("Grain", uiState.settings.isGrainEnabled, onGrainToggle, Modifier.weight(1f))
             ToggleChip("Halation", uiState.settings.isHalationEnabled, onHalationToggle, Modifier.weight(1f))
         }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Cinema LUT section
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Cinema LUT", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (uiState.settings.cinematicLut != null) {
+                Text("Active", color = MoodAccent, fontSize = 10.sp)
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+
+        LazyRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            item {
+                val isNone = uiState.settings.cinematicLut == null
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isNone) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+                        .border(0.5.dp, if (isNone) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(10.dp))
+                        .clickable { onLutSelect(null) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text("None", color = if (isNone) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = if (isNone) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
+            items(CinematicLut.entries.toList()) { lut ->
+                val isSelected = lut == uiState.settings.cinematicLut
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isSelected) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+                        .border(0.5.dp, if (isSelected) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(10.dp))
+                        .clickable { onLutSelect(if (isSelected) null else lut) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(lut.displayName, color = if (isSelected) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
+        }
+
+        if (uiState.settings.cinematicLut != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            SettingsSlider("LUT Strength", uiState.settings.lutIntensity, 0f..1f, onLutIntensityChange)
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // HD Enhancement section
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("HD Enhancement", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ToggleChip("HD On", uiState.settings.isHdEnabled, onHdToggle, Modifier.weight(1f))
+        }
+        if (uiState.settings.isHdEnabled) {
+            Spacer(modifier = Modifier.height(4.dp))
+            SettingsSlider("HD Strength", uiState.settings.hdIntensity, 0f..1f, onHdIntensityChange)
+        }
+
         Spacer(modifier = Modifier.height(4.dp))
     }
 }
@@ -739,3 +809,4 @@ private fun ErrorToast(message: String, modifier: Modifier = Modifier) {
         Text(text = message, color = Color(0xFFCF6679), fontSize = 13.sp)
     }
 }
+

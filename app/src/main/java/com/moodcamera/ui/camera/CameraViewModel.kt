@@ -351,8 +351,20 @@ class CameraViewModel @Inject constructor(
         cam.cameraControl.setZoomRatio(ratio.coerceIn(minZoom, maxZoom))
     }
 
-    fun toggleSettings() {
-        _uiState.update { it.copy(showSettings = !it.showSettings) }
+    fun updateCinematicLut(lut: com.moodcamera.processing.enhance.CinematicLut?) {
+        _uiState.update { it.copy(settings = it.settings.copy(cinematicLut = lut)) }
+    }
+
+    fun updateLutIntensity(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(lutIntensity = value)) }
+    }
+
+    fun toggleHd() {
+        _uiState.update { it.copy(settings = it.settings.copy(isHdEnabled = !it.settings.isHdEnabled)) }
+    }
+
+    fun updateHdIntensity(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(hdIntensity = value)) }
     }
 
     fun clearError() {
