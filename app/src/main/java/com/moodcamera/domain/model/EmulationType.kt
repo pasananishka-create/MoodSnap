@@ -13,7 +13,7 @@ enum class EmulationType(
     CINESTILL_800T(
         displayName = "Cinestill 800T",
         description = "Tungsten cinema film with halation",
-        category = EmulationCategory.FILMIC
+        category = EmulationCategory.CINEMATIC
     ),
     EKTAR(
         displayName = "Ektar",
@@ -64,11 +64,42 @@ enum class EmulationType(
         displayName = "Ultramax",
         description = "Rich saturated everyday film",
         category = EmulationCategory.FILMIC
+    ),
+    KODACHROME(
+        displayName = "Kodachrome",
+        description = "Classic warm slide film",
+        category = EmulationCategory.CINEMATIC
+    ),
+    EKTACHROME(
+        displayName = "Ektachrome",
+        description = "Cool tones, fine grain slide",
+        category = EmulationCategory.CINEMATIC
+    ),
+    CINESTILL_50D(
+        displayName = "50D",
+        description = "Daylight cinema, clean & warm",
+        category = EmulationCategory.CINEMATIC
+    ),
+    PORTRA_160(
+        displayName = "Portra 160",
+        description = "Ultra smooth, fine grain",
+        category = EmulationCategory.FILMIC
+    ),
+    FUJI_C200(
+        displayName = "C200",
+        description = "Everyday green-tinted film",
+        category = EmulationCategory.FILMIC
+    ),
+    AGFA_VISTA(
+        displayName = "Agfa Vista",
+        description = "Punchy red-biased color",
+        category = EmulationCategory.CINEMATIC
     )
 }
 
 enum class EmulationCategory {
     FILMIC,
     NATURAL,
+    CINEMATIC,
     STYLISTIC
 }

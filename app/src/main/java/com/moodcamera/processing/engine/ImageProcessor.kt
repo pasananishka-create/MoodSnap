@@ -101,6 +101,12 @@ object ImageProcessor {
                 EmulationType.METRO -> metroEmulation(r, g, b)
                 EmulationType.GOLD_200 -> gold200Emulation(r, g, b)
                 EmulationType.ULTRAMAX -> ultramaxEmulation(r, g, b)
+                EmulationType.KODACHROME -> kodachromeEmulation(r, g, b)
+                EmulationType.EKTACHROME -> ektachromeEmulation(r, g, b)
+                EmulationType.CINESTILL_50D -> cinestill50dEmulation(r, g, b)
+                EmulationType.PORTRA_160 -> portra160Emulation(r, g, b)
+                EmulationType.FUJI_C200 -> fujiC200Emulation(r, g, b)
+                EmulationType.AGFA_VISTA -> agfaVistaEmulation(r, g, b)
             }
 
             pixels[i] = Color.argb(
@@ -205,6 +211,48 @@ object ImageProcessor {
         )
     }
 
+    private fun kodachromeEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 1.12f + 0.06f).coerceIn(0f, 1f)
+        val newG = (g * 1.05f + 0.01f).coerceIn(0f, 1f)
+        val newB = (b * 0.88f + 0.02f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
+    private fun ektachromeEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 0.95f).coerceIn(0f, 1f)
+        val newG = (g * 1.02f + 0.01f).coerceIn(0f, 1f)
+        val newB = (b * 1.12f + 0.04f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
+    private fun cinestill50dEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 1.08f + 0.04f).coerceIn(0f, 1f)
+        val newG = (g * 1.04f + 0.01f).coerceIn(0f, 1f)
+        val newB = (b * 1.0f + 0.03f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
+    private fun portra160Emulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 1.06f + 0.03f).coerceIn(0f, 1f)
+        val newG = (g * 1.01f + 0.01f).coerceIn(0f, 1f)
+        val newB = (b * 0.95f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
+    private fun fujiC200Emulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 0.97f).coerceIn(0f, 1f)
+        val newG = (g * 1.06f + 0.03f).coerceIn(0f, 1f)
+        val newB = (b * 1.02f + 0.02f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
+    private fun agfaVistaEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val newR = (r * 1.18f + 0.04f).coerceIn(0f, 1f)
+        val newG = (g * 0.98f).coerceIn(0f, 1f)
+        val newB = (b * 0.92f).coerceIn(0f, 1f)
+        return Triple(newR, newG, newB)
+    }
+
     private fun applyTone(pixels: IntArray, toneType: ToneType, width: Int, height: Int) {
         if (toneType == ToneType.NEUTRAL) return
 
@@ -285,9 +333,11 @@ object ImageProcessor {
             EmulationType.VELVIA -> 1.4f
             EmulationType.EKTAR -> 1.3f
             EmulationType.ULTRAMAX -> 1.2f
+            EmulationType.AGFA_VISTA -> 1.25f
             EmulationType.TRI_X -> 0f
             EmulationType.HP5 -> 0f
             EmulationType.FUJI_400H -> 0.8f
+            EmulationType.FUJI_C200 -> 0.85f
             EmulationType.METRO -> 0.7f
             else -> return
         }

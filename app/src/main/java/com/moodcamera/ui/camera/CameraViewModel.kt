@@ -220,6 +220,16 @@ class CameraViewModel @Inject constructor(
         }
     }
 
+    fun captureForAnalysis(previewView: PreviewView) {
+        viewModelScope.launch {
+            try {
+                val bitmap = previewView.bitmap ?: return@launch
+                val scaled = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
+                analyzeScene(scaled)
+            } catch (_: Exception) { }
+        }
+    }
+
     fun analyzeScene(bitmap: Bitmap) {
         if (!_uiState.value.settings.isAutoFilterEnabled) return
         viewModelScope.launch {
