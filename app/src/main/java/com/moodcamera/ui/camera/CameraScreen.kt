@@ -160,20 +160,24 @@ fun CameraScreen(
     }
 
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
-        kotlinx.coroutines.delay(500)
+        kotlinx.coroutines.delay(800)
         while (true) {
             try {
                 val bmp = previewView.bitmap
                 if (bmp != null && bmp.width > 0 && bmp.height > 0) {
-                    val src = Bitmap.createScaledBitmap(bmp, 480, 640, true)
+                    val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
+                    val old = cachedSourceBitmap
                     cachedSourceBitmap = src
+                    if (old != null && old !== src) old.recycle()
                     val processed = withContext(Dispatchers.Default) {
                         PreviewProcessor.processPreview(src, uiState.settings)
                     }
+                    val oldResult = livePreviewBitmap
                     livePreviewBitmap = processed
+                    if (oldResult != null && oldResult !== processed) oldResult.recycle()
                 }
             } catch (_: Exception) {}
-            kotlinx.coroutines.delay(100)
+            kotlinx.coroutines.delay(1500)
         }
     }
 
@@ -182,7 +186,9 @@ fun CameraScreen(
         val processed = withContext(Dispatchers.Default) {
             PreviewProcessor.processPreview(src, uiState.settings)
         }
+        val old = livePreviewBitmap
         livePreviewBitmap = processed
+        if (old != null && old !== processed) old.recycle()
     }
 
     var pinchZoom by remember { mutableFloatStateOf(uiState.currentZoom) }
