@@ -8,17 +8,21 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -139,14 +143,28 @@ fun CameraScreen(
         viewModel.startCamera(lifecycleOwner, previewView)
     }
 
+    var pinchZoom by remember { mutableStateOf(uiState.currentZoom) }
+
+    LaunchedEffect(pinchZoom) {
+        viewModel.setZoomRatio(pinchZoom)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MoodBlack)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         AndroidView(
             factory = { previewView },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        val newZoom = (pinchZoom * zoom).coerceIn(1f, 10f)
+                        pinchZoom = newZoom
+                    }
+                }
         )
 
         Box(
@@ -198,6 +216,7 @@ fun CameraScreen(
                 showFilterBar = !showFilterBar
                 showAdjustPanel = false
             },
+            onAspectRatioCycle = { viewModel.cycleAspectRatio() },
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -277,6 +296,7 @@ private fun CameraTopBar(
     onAutoFilterToggle: () -> Unit,
     onGridToggle: () -> Unit,
     onFilterToggle: () -> Unit,
+    onAspectRatioCycle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -287,7 +307,7 @@ private fun CameraTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onFlashToggle, modifier = Modifier.size(40.dp)) {
                 Icon(
                     imageVector = if (uiState.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
@@ -303,6 +323,22 @@ private fun CameraTopBar(
                     contentDescription = "Grid",
                     tint = if (uiState.settings.isGridEnabled) MoodAccent else Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MoodAccent.copy(alpha = 0.2f))
+                    .clickable(onClick = onAspectRatioCycle)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = uiState.settings.aspectRatio.displayName,
+                    color = MoodAccent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }

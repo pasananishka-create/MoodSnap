@@ -337,8 +337,18 @@ class CameraViewModel @Inject constructor(
         _uiState.update { it.copy(settings = it.settings.copy(isGridEnabled = !it.settings.isGridEnabled)) }
     }
 
-    fun updateAspectRatio(ratio: AspectRatio) {
-        _uiState.update { it.copy(settings = it.settings.copy(aspectRatio = ratio)) }
+    fun cycleAspectRatio() {
+        val entries = AspectRatio.entries
+        val current = _uiState.value.settings.aspectRatio
+        val nextIndex = (entries.indexOf(current) + 1) % entries.size
+        _uiState.update { it.copy(settings = it.settings.copy(aspectRatio = entries[nextIndex])) }
+    }
+
+    fun setZoomRatio(ratio: Float) {
+        val cam = camera ?: return
+        val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+        val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 10f
+        cam.cameraControl.setZoomRatio(ratio.coerceIn(minZoom, maxZoom))
     }
 
     fun toggleSettings() {
