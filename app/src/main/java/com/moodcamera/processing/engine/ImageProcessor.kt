@@ -12,67 +12,76 @@ import com.moodcamera.domain.model.ToneType
 import com.moodcamera.processing.grain.FilmGrain
 import com.moodcamera.processing.halation.HalationEffect
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.pow
+import kotlin.math.sqrt
 import kotlin.math.roundToInt
-import kotlin.random.Random
 
 object ImageProcessor {
+
+    private const val MAX_DIMENSION = 2048
+
+    fun downscaleIfNeeded(bitmap: Bitmap): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= MAX_DIMENSION && h <= MAX_DIMENSION) return bitmap
+        val scale = MAX_DIMENSION.toFloat() / maxOf(w, h)
+        val newW = (w * scale).roundToInt()
+        val newH = (h * scale).roundToInt()
+        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+        if (scaled !== bitmap) bitmap.recycle()
+        return scaled
+    }
 
     fun processImage(
         original: Bitmap,
         settings: CameraSettings,
         quality: com.moodcamera.domain.model.QualityType
     ): Bitmap {
-        var result = original.copy(Bitmap.Config.ARGB_8888, true)
+        val src = downscaleIfNeeded(original.copy(Bitmap.Config.ARGB_8888, true))
+        if (src !== original) original.recycle()
 
-        // Step 1: Apply film emulation color grading
-        result = applyEmulation(result, settings.emulationType)
+        val width = src.width
+        val height = src.height
+        val pixels = IntArray(width * height)
+        src.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        // Step 2: Apply tone curve
-        result = applyTone(result, settings.toneType)
+        applyEmulation(pixels, settings.emulationType)
+        applyTone(pixels, settings.toneType, width, height)
+        applySaturation(pixels, settings.emulationType, width, height)
+        applyTemperature(pixels, settings.temperature, settings.tint)
 
-        // Step 3: Apply saturation
-        result = adjustSaturation(result, settings.emulationType)
-
-        // Step 4: Apply contrast
-        result = adjustContrast(result, settings.contrast)
-
-        // Step 5: Apply brightness
-        result = adjustBrightness(result, settings.brightness)
-
-        // Step 6: Apply temperature/tint
-        result = adjustTemperature(result, settings.temperature, settings.tint)
-
-        // Step 7: Apply fade
         if (settings.fade > 0f) {
-            result = applyFade(result, settings.fade)
+            applyFade(pixels, settings.fade)
         }
 
-        // Step 8: Apply film grain
+        src.setPixels(pixels, 0, width, 0, 0, width, height)
+
+        var result = src
+
+        result = applyContrastMatrix(result, settings.contrast)
+        result = applyBrightnessMatrix(result, settings.brightness)
+
         if (settings.isGrainEnabled && quality.grainMultiplier > 0f) {
-            result = FilmGrain.applyGrain(result, quality.grainMultiplier)
+            val grainResult = FilmGrain.applyGrain(result, quality.grainMultiplier)
+            if (grainResult !== result) result.recycle()
+            result = grainResult
         }
 
-        // Step 9: Apply halation
         if (settings.isHalationEnabled && settings.halationIntensity > 0f) {
-            result = HalationEffect.applyHalation(result, settings.halationIntensity)
+            val halationResult = HalationEffect.applyHalation(result, settings.halationIntensity)
+            if (halationResult !== result) result.recycle()
+            result = halationResult
         }
 
-        // Step 10: Apply vignette
         if (settings.vignette > 0f) {
-            result = applyVignette(result, settings.vignette)
+            val vignetteResult = applyVignette(result, settings.vignette)
+            if (vignetteResult !== result) result.recycle()
+            result = vignetteResult
         }
 
         return result
     }
 
-    private fun applyEmulation(bitmap: Bitmap, type: EmulationType): Bitmap {
-        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val pixels = IntArray(result.width * result.height)
-        result.getPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
-
+    private fun applyEmulation(pixels: IntArray, type: EmulationType) {
         for (i in pixels.indices) {
             val pixel = pixels[i]
             val r = Color.red(pixel) / 255f
@@ -94,104 +103,110 @@ object ImageProcessor {
                 EmulationType.ULTRAMAX -> ultramaxEmulation(r, g, b)
             }
 
-            pixels[i] = Color.rgb(
+            pixels[i] = Color.argb(
+                Color.alpha(pixel),
                 (newR * 255).roundToInt().coerceIn(0, 255),
                 (newG * 255).roundToInt().coerceIn(0, 255),
                 (newB * 255).roundToInt().coerceIn(0, 255)
             )
         }
-
-        result.setPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
-        return result
     }
 
     private fun portraEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.1f + 0.05f).coerceIn(0f, 1f)
-        val newG = (g * 1.02f + 0.02f).coerceIn(0f, 1f)
-        val newB = (b * 0.92f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.1f + 0.05f).coerceIn(0f, 1f),
+            (g * 1.02f + 0.02f).coerceIn(0f, 1f),
+            (b * 0.92f).coerceIn(0f, 1f)
+        )
     }
 
     private fun cinestillEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.05f + 0.08f).coerceIn(0f, 1f)
-        val newG = (g * 0.95f).coerceIn(0f, 1f)
-        val newB = (b * 1.15f + 0.05f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.05f + 0.08f).coerceIn(0f, 1f),
+            (g * 0.95f).coerceIn(0f, 1f),
+            (b * 1.15f + 0.05f).coerceIn(0f, 1f)
+        )
     }
 
     private fun ektarEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.2f + 0.02f).coerceIn(0f, 1f)
-        val newG = (g * 1.1f + 0.01f).coerceIn(0f, 1f)
-        val newB = (b * 1.05f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.2f + 0.02f).coerceIn(0f, 1f),
+            (g * 1.1f + 0.01f).coerceIn(0f, 1f),
+            (b * 1.05f).coerceIn(0f, 1f)
+        )
     }
 
     private fun fujiEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 0.95f).coerceIn(0f, 1f)
-        val newG = (g * 1.0f + 0.03f).coerceIn(0f, 1f)
-        val newB = (b * 1.05f + 0.05f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 0.95f).coerceIn(0f, 1f),
+            (g * 1.0f + 0.03f).coerceIn(0f, 1f),
+            (b * 1.05f + 0.05f).coerceIn(0f, 1f)
+        )
     }
 
     private fun velviaEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.3f).coerceIn(0f, 1f)
-        val newG = (g * 1.2f).coerceIn(0f, 1f)
-        val newB = (b * 1.1f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.3f).coerceIn(0f, 1f),
+            (g * 1.2f).coerceIn(0f, 1f),
+            (b * 1.1f).coerceIn(0f, 1f)
+        )
     }
 
     private fun proviaEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.02f).coerceIn(0f, 1f)
-        val newG = (g * 1.0f).coerceIn(0f, 1f)
-        val newB = (b * 1.03f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.02f).coerceIn(0f, 1f),
+            (g * 1.0f).coerceIn(0f, 1f),
+            (b * 1.03f).coerceIn(0f, 1f)
+        )
     }
 
     private fun triXEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val luma = (r * 0.299f + g * 0.587f + b * 0.114f)
+        val luma = r * 0.299f + g * 0.587f + b * 0.114f
         val contrast = ((luma - 0.5f) * 1.4f + 0.5f).coerceIn(0f, 1f)
         return Triple(contrast, contrast, contrast)
     }
 
     private fun hp5Emulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val luma = (r * 0.299f + g * 0.587f + b * 0.114f)
+        val luma = r * 0.299f + g * 0.587f + b * 0.114f
         val contrast = ((luma - 0.5f) * 1.2f + 0.5f).coerceIn(0f, 1f)
         val warm = (contrast * 1.02f).coerceIn(0f, 1f)
         return Triple(warm, warm, contrast)
     }
 
     private fun arizonaEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.15f + 0.08f).coerceIn(0f, 1f)
-        val newG = (g * 1.0f + 0.02f).coerceIn(0f, 1f)
-        val newB = (b * 0.85f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.15f + 0.08f).coerceIn(0f, 1f),
+            (g * 1.0f + 0.02f).coerceIn(0f, 1f),
+            (b * 0.85f).coerceIn(0f, 1f)
+        )
     }
 
     private fun metroEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 0.85f).coerceIn(0f, 1f)
-        val newG = (g * 0.9f + 0.05f).coerceIn(0f, 1f)
-        val newB = (b * 1.1f + 0.05f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 0.85f).coerceIn(0f, 1f),
+            (g * 0.9f + 0.05f).coerceIn(0f, 1f),
+            (b * 1.1f + 0.05f).coerceIn(0f, 1f)
+        )
     }
 
     private fun gold200Emulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.1f + 0.05f).coerceIn(0f, 1f)
-        val newG = (g * 1.05f).coerceIn(0f, 1f)
-        val newB = (b * 0.9f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.1f + 0.05f).coerceIn(0f, 1f),
+            (g * 1.05f).coerceIn(0f, 1f),
+            (b * 0.9f).coerceIn(0f, 1f)
+        )
     }
 
     private fun ultramaxEmulation(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
-        val newR = (r * 1.15f + 0.03f).coerceIn(0f, 1f)
-        val newG = (g * 1.1f).coerceIn(0f, 1f)
-        val newB = (b * 0.95f).coerceIn(0f, 1f)
-        return Triple(newR, newG, newB)
+        return Triple(
+            (r * 1.15f + 0.03f).coerceIn(0f, 1f),
+            (g * 1.1f).coerceIn(0f, 1f),
+            (b * 0.95f).coerceIn(0f, 1f)
+        )
     }
 
-    private fun applyTone(bitmap: Bitmap, toneType: ToneType): Bitmap {
-        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val pixels = IntArray(result.width * result.height)
-        result.getPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
+    private fun applyTone(pixels: IntArray, toneType: ToneType, width: Int, height: Int) {
+        if (toneType == ToneType.NEUTRAL) return
 
         for (i in pixels.indices) {
             val pixel = pixels[i]
@@ -200,7 +215,7 @@ object ImageProcessor {
             var b = Color.blue(pixel) / 255f
 
             when (toneType) {
-                ToneType.NEUTRAL -> { /* no change */ }
+                ToneType.NEUTRAL -> {}
                 ToneType.CRUSH -> {
                     r = crushCurve(r)
                     g = crushCurve(g)
@@ -238,20 +253,16 @@ object ImageProcessor {
                 }
             }
 
-            pixels[i] = Color.rgb(
+            pixels[i] = Color.argb(
+                Color.alpha(pixel),
                 (r * 255).roundToInt().coerceIn(0, 255),
                 (g * 255).roundToInt().coerceIn(0, 255),
                 (b * 255).roundToInt().coerceIn(0, 255)
             )
         }
-
-        result.setPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
-        return result
     }
 
-    private fun crushCurve(x: Float): Float {
-        return x.pow(1.5f).coerceIn(0f, 1f)
-    }
+    private fun crushCurve(x: Float): Float = (x * x * x * 0.5f + x * x * 0.5f).coerceIn(0f, 1f)
 
     private fun ultraCurve(x: Float): Float {
         return if (x > 0.5f) {
@@ -269,7 +280,7 @@ object ImageProcessor {
         }
     }
 
-    private fun adjustSaturation(bitmap: Bitmap, type: EmulationType): Bitmap {
+    private fun applySaturation(pixels: IntArray, type: EmulationType, width: Int, height: Int) {
         val saturation = when (type) {
             EmulationType.VELVIA -> 1.4f
             EmulationType.EKTAR -> 1.3f
@@ -278,108 +289,96 @@ object ImageProcessor {
             EmulationType.HP5 -> 0f
             EmulationType.FUJI_400H -> 0.8f
             EmulationType.METRO -> 0.7f
-            else -> 1.0f
+            else -> return
         }
 
-        val paint = Paint().apply {
-            colorFilter = ColorMatrixColorFilter(
-                ColorMatrix().apply { setSaturation(saturation) }
+        val invSat = 1f - saturation
+        val rw = 0.2126f * invSat
+        val gw = 0.7152f * invSat
+        val bw = 0.0722f * invSat
+
+        for (i in pixels.indices) {
+            val pixel = pixels[i]
+            val r = Color.red(pixel)
+            val g = Color.green(pixel)
+            val b = Color.blue(pixel)
+            val gray = rw * r + gw * g + bw * b
+
+            pixels[i] = Color.argb(
+                Color.alpha(pixel),
+                (gray + saturation * r).roundToInt().coerceIn(0, 255),
+                (gray + saturation * g).roundToInt().coerceIn(0, 255),
+                (gray + saturation * b).roundToInt().coerceIn(0, 255)
             )
         }
-
-        val result = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-        canvas.drawBitmap(bitmap, 0f, 0f, paint)
-        return result
     }
 
-    private fun adjustContrast(bitmap: Bitmap, contrast: Float): Bitmap {
+    private fun applyTemperature(pixels: IntArray, temperature: Float, tint: Float) {
+        if (temperature == 0f && tint == 0f) return
+
+        val tempShift = temperature * 25.5f
+        val tintShift = tint * 12.75f
+
+        for (i in pixels.indices) {
+            val pixel = pixels[i]
+            var r = Color.red(pixel)
+            var g = Color.green(pixel)
+            var b = Color.blue(pixel)
+
+            r = (r + tempShift).roundToInt().coerceIn(0, 255)
+            b = (b - tempShift).roundToInt().coerceIn(0, 255)
+            g = (g + tintShift).roundToInt().coerceIn(0, 255)
+
+            pixels[i] = Color.argb(Color.alpha(pixel), r, g, b)
+        }
+    }
+
+    private fun applyFade(pixels: IntArray, fade: Float) {
+        val lift = (fade * 38f).roundToInt()
+
+        for (i in pixels.indices) {
+            val pixel = pixels[i]
+            val r = (Color.red(pixel) + lift).coerceIn(0, 255)
+            val g = (Color.green(pixel) + lift).coerceIn(0, 255)
+            val b = (Color.blue(pixel) + lift).coerceIn(0, 255)
+            pixels[i] = Color.argb(Color.alpha(pixel), r, g, b)
+        }
+    }
+
+    private fun applyContrastMatrix(bitmap: Bitmap, contrast: Float): Bitmap {
+        if (contrast == 1f) return bitmap
+        val c = contrast
+        val t = -0.5f * c + 0.5f
         val paint = Paint().apply {
             colorFilter = ColorMatrixColorFilter(
                 ColorMatrix(floatArrayOf(
-                    contrast, 0f, 0f, 0f, -0.5f * contrast + 0.5f,
-                    0f, contrast, 0f, 0f, -0.5f * contrast + 0.5f,
-                    0f, 0f, contrast, 0f, -0.5f * contrast + 0.5f,
+                    c, 0f, 0f, 0f, t,
+                    0f, c, 0f, 0f, t,
+                    0f, 0f, c, 0f, t,
                     0f, 0f, 0f, 1f, 0f
                 ))
             )
         }
-
         val result = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+        Canvas(result).drawBitmap(bitmap, 0f, 0f, paint)
         return result
     }
 
-    private fun adjustBrightness(bitmap: Bitmap, brightness: Float): Bitmap {
+    private fun applyBrightnessMatrix(bitmap: Bitmap, brightness: Float): Bitmap {
         if (brightness == 0f) return bitmap
+        val shift = brightness * 255f
         val paint = Paint().apply {
             colorFilter = ColorMatrixColorFilter(
                 ColorMatrix(floatArrayOf(
-                    1f, 0f, 0f, 0f, brightness * 255,
-                    0f, 1f, 0f, 0f, brightness * 255,
-                    0f, 0f, 1f, 0f, brightness * 255,
+                    1f, 0f, 0f, 0f, shift,
+                    0f, 1f, 0f, 0f, shift,
+                    0f, 0f, 1f, 0f, shift,
                     0f, 0f, 0f, 1f, 0f
                 ))
             )
         }
-
         val result = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-        canvas.drawBitmap(bitmap, 0f, 0f, paint)
-        return result
-    }
-
-    private fun adjustTemperature(bitmap: Bitmap, temperature: Float, tint: Float): Bitmap {
-        if (temperature == 0f && tint == 0f) return bitmap
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-
-        for (i in pixels.indices) {
-            val pixel = pixels[i]
-            var r = Color.red(pixel) / 255f
-            var g = Color.green(pixel) / 255f
-            var b = Color.blue(pixel) / 255f
-
-            r = (r + temperature * 0.1f).coerceIn(0f, 1f)
-            b = (b - temperature * 0.1f).coerceIn(0f, 1f)
-            g = (g + tint * 0.05f).coerceIn(0f, 1f)
-
-            pixels[i] = Color.rgb(
-                (r * 255).roundToInt().coerceIn(0, 255),
-                (g * 255).roundToInt().coerceIn(0, 255),
-                (b * 255).roundToInt().coerceIn(0, 255)
-            )
-        }
-
-        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        result.setPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
-        return result
-    }
-
-    private fun applyFade(bitmap: Bitmap, fade: Float): Bitmap {
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-
-        for (i in pixels.indices) {
-            val pixel = pixels[i]
-            var r = Color.red(pixel) / 255f
-            var g = Color.green(pixel) / 255f
-            var b = Color.blue(pixel) / 255f
-
-            r = (r + fade * 0.15f).coerceIn(0f, 1f)
-            g = (g + fade * 0.15f).coerceIn(0f, 1f)
-            b = (b + fade * 0.15f).coerceIn(0f, 1f)
-
-            pixels[i] = Color.rgb(
-                (r * 255).roundToInt().coerceIn(0, 255),
-                (g * 255).roundToInt().coerceIn(0, 255),
-                (b * 255).roundToInt().coerceIn(0, 255)
-            )
-        }
-
-        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        result.setPixels(pixels, 0, result.width, 0, 0, result.width, result.height)
+        Canvas(result).drawBitmap(bitmap, 0f, 0f, paint)
         return result
     }
 
@@ -392,21 +391,29 @@ object ImageProcessor {
 
         val centerX = width / 2f
         val centerY = height / 2f
-        val maxDist = kotlin.math.sqrt(centerX * centerX + centerY * centerY)
+        val maxDist = sqrt(centerX * centerX + centerY * centerY)
+        val maxDistSq = maxDist * maxDist
+        val radiusSq = maxDistSq * 0.8f
 
         for (y in 0 until height) {
+            val dy = y - centerY
+            val dySq = dy * dy
             for (x in 0 until width) {
                 val dx = x - centerX
-                val dy = y - centerY
-                val dist = kotlin.math.sqrt(dx * dx + dy * dy) / maxDist
-                val vignette = 1f - (dist * dist * intensity)
+                val distSq = dx * dx + dySq
+                val vignette = if (distSq < radiusSq) 1f else {
+                    val t = (distSq - radiusSq) / (maxDistSq - radiusSq)
+                    (1f - t * t * intensity).coerceIn(0f, 1f)
+                }
 
                 val i = y * width + x
                 val pixel = pixels[i]
-                val r = (Color.red(pixel) * vignette).roundToInt().coerceIn(0, 255)
-                val g = (Color.green(pixel) * vignette).roundToInt().coerceIn(0, 255)
-                val b = (Color.blue(pixel) * vignette).roundToInt().coerceIn(0, 255)
-                pixels[i] = Color.rgb(r, g, b)
+                pixels[i] = Color.argb(
+                    Color.alpha(pixel),
+                    (Color.red(pixel) * vignette).roundToInt().coerceIn(0, 255),
+                    (Color.green(pixel) * vignette).roundToInt().coerceIn(0, 255),
+                    (Color.blue(pixel) * vignette).roundToInt().coerceIn(0, 255)
+                )
             }
         }
 

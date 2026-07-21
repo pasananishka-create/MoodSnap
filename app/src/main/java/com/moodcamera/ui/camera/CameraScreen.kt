@@ -20,19 +20,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +63,7 @@ import androidx.camera.view.PreviewView
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.moodcamera.domain.model.AspectRatio
 import com.moodcamera.domain.model.EmulationType
+import com.moodcamera.domain.model.ToneType
 import com.moodcamera.ui.theme.MoodAccent
 import com.moodcamera.ui.theme.MoodBlack
 import com.moodcamera.ui.theme.MoodOnSurfaceVariant
@@ -85,18 +94,15 @@ fun CameraScreen(
             .fillMaxSize()
             .background(MoodBlack)
     ) {
-        // Camera Preview
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Grid overlay
         if (uiState.settings.isGridEnabled) {
             GridOverlay(modifier = Modifier.fillMaxSize())
         }
 
-        // Top bar
         CameraTopBar(
             uiState = uiState,
             onFlashToggle = { viewModel.toggleFlash() },
@@ -106,7 +112,6 @@ fun CameraScreen(
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // Scene info overlay
         AnimatedVisibility(
             visible = uiState.showSceneInfo && uiState.sceneInfo != null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -124,29 +129,50 @@ fun CameraScreen(
             }
         }
 
-        // Film emulation selector
         EmulationSelector(
             currentEmulation = uiState.settings.emulationType,
             onSelect = { viewModel.updateEmulation(it) },
             modifier = Modifier.align(Alignment.CenterStart)
         )
 
-        // Bottom controls
-        CameraBottomBar(
-            uiState = uiState,
-            onCapture = { viewModel.takePhoto() },
-            onSwitchCamera = { viewModel.toggleFrontCamera() },
-            onGalleryClick = onNavigateToGallery,
-            onExposureChange = { viewModel.updateExposure(it) },
+        AnimatedVisibility(
+            visible = uiState.showSettings,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        ) {
+            SettingsPanel(
+                uiState = uiState,
+                onToneChange = { viewModel.updateTone(it) },
+                onContrastChange = { viewModel.updateContrast(it) },
+                onBrightnessChange = { viewModel.updateBrightness(it) },
+                onTemperatureChange = { viewModel.updateTemperature(it) },
+                onTintChange = { viewModel.updateTint(it) },
+                onFadeChange = { viewModel.updateFade(it) },
+                onVignetteChange = { viewModel.updateVignette(it) },
+                onHalationChange = { viewModel.updateHalationIntensity(it) },
+                onGrainToggle = { viewModel.toggleGrain() },
+                onHalationToggle = { viewModel.toggleHalation() },
+                onDismiss = { viewModel.toggleSettings() }
+            )
+        }
 
-        // Processing overlay
+        if (!uiState.showSettings) {
+            CameraBottomBar(
+                uiState = uiState,
+                onCapture = { viewModel.takePhoto() },
+                onSwitchCamera = { viewModel.toggleFrontCamera() },
+                onGalleryClick = onNavigateToGallery,
+                onExposureChange = { viewModel.updateExposure(it) },
+                onSettingsClick = { viewModel.toggleSettings() },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
         if (uiState.isProcessing) {
             ProcessingOverlay()
         }
 
-        // Error toast
         uiState.errorMessage?.let { error ->
             LaunchedEffect(error) {
                 kotlinx.coroutines.delay(3000)
@@ -245,43 +271,168 @@ private fun EmulationSelector(
 ) {
     Column(
         modifier = modifier
-            .padding(start = 12.dp)
+            .padding(start = 8.dp)
             .background(MoodBlack.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-            .padding(vertical = 8.dp)
+            .padding(vertical = 6.dp)
     ) {
-        EmulationType.entries.take(6).forEach { type ->
+        EmulationType.entries.forEach { type ->
             val isSelected = type == currentEmulation
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(if (isSelected) MoodAccent.copy(alpha = 0.3f) else Color.Transparent)
                     .clickable { onSelect(type) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .width(100.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                    .width(90.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = type.displayName,
                     color = if (isSelected) MoodAccent else Color.White,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
                 )
             }
         }
+    }
+}
 
-        if (EmulationType.entries.size > 6) {
-            Text(
-                text = "...",
-                color = MoodOnSurfaceVariant,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(4.dp)
-            )
+@Composable
+private fun SettingsPanel(
+    uiState: CameraUiState,
+    onToneChange: (ToneType) -> Unit,
+    onContrastChange: (Float) -> Unit,
+    onBrightnessChange: (Float) -> Unit,
+    onTemperatureChange: (Float) -> Unit,
+    onTintChange: (Float) -> Unit,
+    onFadeChange: (Float) -> Unit,
+    onVignetteChange: (Float) -> Unit,
+    onHalationChange: (Float) -> Unit,
+    onGrainToggle: () -> Unit,
+    onHalationToggle: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MoodBlack.copy(alpha = 0.85f))
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Adjustments", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+            }
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text("Tone", color = MoodOnSurfaceVariant, fontSize = 12.sp)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(ToneType.entries.toList()) { tone ->
+                val isSelected = tone == uiState.settings.toneType
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSelected) MoodAccent.copy(alpha = 0.3f) else MoodSurfaceVariant)
+                        .clickable { onToneChange(tone) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = tone.displayName,
+                        color = if (isSelected) MoodAccent else Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingsSlider("Contrast", uiState.settings.contrast, 0.5f..2f, onContrastChange)
+        SettingsSlider("Brightness", uiState.settings.brightness, -0.5f..0.5f, onBrightnessChange)
+        SettingsSlider("Temperature", uiState.settings.temperature, -1f..1f, onTemperatureChange)
+        SettingsSlider("Tint", uiState.settings.tint, -1f..1f, onTintChange)
+        SettingsSlider("Fade", uiState.settings.fade, 0f..1f, onFadeChange)
+        SettingsSlider("Vignette", uiState.settings.vignette, 0f..1f, onVignetteChange)
+        SettingsSlider("Halation", uiState.settings.halationIntensity, 0f..1f, onHalationChange)
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            ToggleChip("Grain", uiState.settings.isGrainEnabled, onGrainToggle, Modifier.weight(1f))
+            ToggleChip("Halation", uiState.settings.isHalationEnabled, onHalationToggle, Modifier.weight(1f))
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun SettingsSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, color = MoodOnSurfaceVariant, fontSize = 12.sp)
+            Text(String.format("%.1f", value), color = MoodAccent, fontSize = 12.sp)
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = range,
+            modifier = Modifier.fillMaxWidth().height(24.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = MoodAccent,
+                activeTrackColor = MoodAccent,
+                inactiveTrackColor = MoodSurfaceVariant
+            )
+        )
+    }
+}
+
+@Composable
+private fun ToggleChip(
+    label: String,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (enabled) MoodAccent.copy(alpha = 0.3f) else MoodSurfaceVariant)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = if (enabled) MoodAccent else Color.White,
+            fontSize = 12.sp,
+            fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }
 
@@ -364,6 +515,7 @@ private fun CameraBottomBar(
     onSwitchCamera: () -> Unit,
     onGalleryClick: () -> Unit,
     onExposureChange: (Float) -> Unit,
+    onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -373,7 +525,6 @@ private fun CameraBottomBar(
             .padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Exposure slider
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -404,7 +555,6 @@ private fun CameraBottomBar(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Capture button row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -444,23 +594,41 @@ private fun CameraBottomBar(
                 }
             }
 
-            IconButton(onClick = onSwitchCamera, modifier = Modifier.size(48.dp)) {
+            IconButton(onClick = onSettingsClick, modifier = Modifier.size(48.dp)) {
                 Icon(
-                    imageVector = Icons.Default.SwapHoriz,
-                    contentDescription = "Switch Camera",
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Settings",
                     tint = Color.White,
                     modifier = Modifier.size(28.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = uiState.settings.emulationType.displayName,
-            color = MoodAccent,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium
-        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onSwitchCamera, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Default.SwapHoriz,
+                    contentDescription = "Switch Camera",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Text(
+                text = "${uiState.settings.emulationType.displayName}  |  ${uiState.settings.toneType.displayName}",
+                color = MoodAccent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
 

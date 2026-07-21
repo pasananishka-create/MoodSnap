@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 data class CameraUiState(
@@ -45,7 +46,8 @@ data class CameraUiState(
     val hasFlashUnit: Boolean = false,
     val flashEnabled: Boolean = false,
     val photoCount: Int = 0,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val showSettings: Boolean = false
 )
 
 @HiltViewModel
@@ -147,6 +149,7 @@ class CameraViewModel @Inject constructor(
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    tempFile.delete()
                     _uiState.update {
                         it.copy(
                             isCapturing = false,
@@ -163,7 +166,11 @@ class CameraViewModel @Inject constructor(
             try {
                 _uiState.update { it.copy(isProcessing = true) }
 
-                val originalBitmap = BitmapFactory.decodeFile(tempPath) ?: run {
+                val options = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val originalBitmap = BitmapFactory.decodeFile(tempPath, options) ?: run {
+                    File(tempPath).delete()
                     _uiState.update {
                         it.copy(isCapturing = false, isProcessing = false, errorMessage = "Failed to decode image")
                     }
@@ -180,12 +187,9 @@ class CameraViewModel @Inject constructor(
                 val processedFile = photoRepository.createPhotoFile()
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, processedFile.outputStream())
 
-                val originalFile = photoRepository.createPhotoFile()
-                originalBitmap.compress(Bitmap.CompressFormat.JPEG, 95, originalFile.outputStream())
-
                 val photoEntity = PhotoEntity(
                     filePath = processedFile.absolutePath,
-                    originalFilePath = originalFile.absolutePath,
+                    originalFilePath = "",
                     presetName = settings.getPresetName(),
                     width = processedBitmap.width,
                     height = processedBitmap.height
@@ -194,6 +198,7 @@ class CameraViewModel @Inject constructor(
 
                 originalBitmap.recycle()
                 processedBitmap.recycle()
+                File(tempPath).delete()
 
                 _uiState.update {
                     it.copy(
@@ -203,6 +208,7 @@ class CameraViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
+                File(tempPath).delete()
                 _uiState.update {
                     it.copy(
                         isCapturing = false,
@@ -242,9 +248,49 @@ class CameraViewModel @Inject constructor(
         _uiState.update { it.copy(settings = it.settings.copy(emulationType = type)) }
     }
 
+    fun updateTone(type: com.moodcamera.domain.model.ToneType) {
+        _uiState.update { it.copy(settings = it.settings.copy(toneType = type)) }
+    }
+
     fun updateExposure(value: Float) {
         camera?.cameraControl?.setExposureCompensationIndex(value.toInt())
         _uiState.update { it.copy(settings = it.settings.copy(exposureCompensation = value)) }
+    }
+
+    fun updateContrast(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(contrast = value)) }
+    }
+
+    fun updateBrightness(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(brightness = value)) }
+    }
+
+    fun updateTemperature(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(temperature = value)) }
+    }
+
+    fun updateTint(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(tint = value)) }
+    }
+
+    fun updateFade(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(fade = value)) }
+    }
+
+    fun updateVignette(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(vignette = value)) }
+    }
+
+    fun updateHalationIntensity(value: Float) {
+        _uiState.update { it.copy(settings = it.settings.copy(halationIntensity = value)) }
+    }
+
+    fun toggleGrain() {
+        _uiState.update { it.copy(settings = it.settings.copy(isGrainEnabled = !it.settings.isGrainEnabled)) }
+    }
+
+    fun toggleHalation() {
+        _uiState.update { it.copy(settings = it.settings.copy(isHalationEnabled = !it.settings.isHalationEnabled)) }
     }
 
     fun toggleFlash() {
@@ -283,6 +329,10 @@ class CameraViewModel @Inject constructor(
 
     fun updateAspectRatio(ratio: AspectRatio) {
         _uiState.update { it.copy(settings = it.settings.copy(aspectRatio = ratio)) }
+    }
+
+    fun toggleSettings() {
+        _uiState.update { it.copy(showSettings = !it.showSettings) }
     }
 
     fun clearError() {
