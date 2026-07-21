@@ -93,7 +93,7 @@ class CameraViewModel @Inject constructor(
             .build()
 
         imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(android.util.Size(320, 320))
+            .setTargetResolution(android.util.Size(480, 640))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
             .also { analysis ->

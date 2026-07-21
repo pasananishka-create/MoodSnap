@@ -156,11 +156,11 @@ fun CameraScreen(
         viewModel.startCamera(lifecycleOwner, previewView)
     }
 
-    LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature) {
+    LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {
         val previewBitmap = previewView.bitmap
         if (previewBitmap != null && previewBitmap.width > 0 && previewBitmap.height > 0) {
             try {
-                val scaled = Bitmap.createScaledBitmap(previewBitmap, 320, 240, true)
+                val scaled = Bitmap.createScaledBitmap(previewBitmap, 480, 640, true)
                 val processed = PreviewProcessor.processPreview(scaled, uiState.settings)
                 livePreviewBitmap = processed
             } catch (_: Exception) {}
@@ -209,14 +209,9 @@ fun CameraScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(previewHeight)
-                    .align(Alignment.TopCenter)
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, _, zoom, _ ->
-                            pinchZoom = (pinchZoom * zoom).coerceIn(1f, 10f)
-                        }
-                    },
+                    .align(Alignment.TopCenter),
                 contentScale = ContentScale.Crop,
-                alpha = 0.85f
+                alpha = 1f
             )
         }
 
