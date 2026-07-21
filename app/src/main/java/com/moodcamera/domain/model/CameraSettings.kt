@@ -9,7 +9,7 @@ data class CameraSettings(
     val aspectRatio: AspectRatio = AspectRatio.FOUR_THREE,
     val cinematicLut: CinematicLut? = null,
     val lutIntensity: Float = 0.7f,
-    val isHdEnabled: Boolean = false,
+    val isHdEnabled: Boolean = true,
     val hdIntensity: Float = 0.6f,
     val exposureCompensation: Float = 0f,
     val contrast: Float = 1.0f,
