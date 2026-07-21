@@ -7,10 +7,8 @@ import android.graphics.Paint
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import kotlin.math.abs
-import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.max
-import kotlin.math.sqrt
 import kotlin.math.roundToInt
 
 object HdEnhancer {
@@ -22,97 +20,81 @@ object HdEnhancer {
         val pixels = IntArray(w * h)
         src.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        // 1. Bilateral noise reduction (edge-preserving)
-        val denoised = bilateralFilter(pixels, w, h, 3, 0.08f)
+        // 1. Fast edge-preserving denoise (separable median-like filter)
+        val denoised = fastDenoise(pixels, w, h)
 
-        // 2. Unsharp mask sharpening
-        val sharpened = unsharpMask(denoised, w, h, 2, 1.5f * intensity)
+        // 2. Combined unsharp mask + micro detail in one pass
+        val blurred1 = boxBlur(denoised, w, h, 2)
+        val blurred2 = boxBlur(denoised, w, h, 1)
+        val sharpened = combineSharpen(denoised, blurred1, blurred2, w, h, intensity)
 
-        // 3. Local contrast enhancement (clarity)
-        val clarified = localContrast(sharpened, w, h, 0.6f * intensity)
+        // 3. Local contrast (clarity)
+        val clarified = localContrast(sharpened, w, h, 0.5f * intensity)
 
-        // 4. Micro detail recovery
-        val detailed = microDetail(clarified, w, h, 0.4f * intensity)
-
-        // 5. Dynamic range expansion
-        val expanded = dynamicRangeExpansion(detailed, w, h, 0.3f * intensity)
+        // 4. Dynamic range expansion
+        val expanded = dynamicRangeExpansion(clarified, w, h, 0.25f * intensity)
 
         src.setPixels(expanded, 0, w, 0, 0, w, h)
         return src
     }
 
-    private fun bilateralFilter(pixels: IntArray, w: Int, h: Int, radius: Int, sigmaSpace: Float): IntArray {
+    private fun fastDenoise(pixels: IntArray, w: Int, h: Int): IntArray {
         val out = IntArray(pixels.size)
-        val sigmaColor = sigmaSpace * 255f
-        val kernelSize = radius * 2 + 1
-        val spatialLut = FloatArray(kernelSize * kernelSize)
-        for (dy in -radius..radius) {
-            for (dx in -radius..radius) {
-                val dist2 = (dx * dx + dy * dy).toFloat()
-                spatialLut[(dy + radius) * kernelSize + (dx + radius)] = exp(-dist2 / (2f * radius * radius))
-            }
-        }
-
         for (y in 0 until h) {
             for (x in 0 until w) {
                 val idx = y * w + x
-                val cr = Color.red(pixels[idx]).toFloat()
-                val cg = Color.green(pixels[idx]).toFloat()
-                val cb = Color.blue(pixels[idx]).toFloat()
-                var sumR = 0f; var sumG = 0f; var sumB = 0f; var sumW = 0f
+                val c = pixels[idx]
+                val cr = Color.red(c); val cg = Color.green(c); val cb = Color.blue(c)
 
-                for (dy in -radius..radius) {
-                    val ny = y + dy
-                    if (ny < 0 || ny >= h) continue
-                    for (dx in -radius..radius) {
-                        val nx = x + dx
-                        if (nx < 0 || nx >= w) continue
-                        val nIdx = ny * w + nx
-                        val nr = Color.red(pixels[nIdx]).toFloat()
-                        val ng = Color.green(pixels[nIdx]).toFloat()
-                        val nb = Color.blue(pixels[nIdx]).toFloat()
-                        val colorDist = abs(cr - nr) + abs(cg - ng) + abs(cb - nb)
-                        val colorW = exp(-colorDist * colorDist / (2f * sigmaColor * sigmaColor))
-                        val spW = spatialLut[(dy + radius) * kernelSize + (dx + radius)]
-                        val w2 = spW * colorW
-                        sumR += nr * w2; sumG += ng * w2; sumB += nb * w2; sumW += w2
+                var sumR = cr; var sumG = cg; var sumB = cb; var count = 1
+
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+                        val nx = x + dx; val ny = y + dy
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue
+                        val n = pixels[ny * w + nx]
+                        val nr = Color.red(n); val ng = Color.green(n); val nb = Color.blue(n)
+                        val diff = abs(cr - nr) + abs(cg - ng) + abs(cb - nb)
+                        if (diff < 60) {
+                            sumR += nr; sumG += ng; sumB += nb; count++
+                        }
                     }
                 }
-                if (sumW > 0f) {
-                    out[idx] = Color.argb(Color.alpha(pixels[idx]),
-                        (sumR / sumW).roundToInt().coerceIn(0, 255),
-                        (sumG / sumW).roundToInt().coerceIn(0, 255),
-                        (sumB / sumW).roundToInt().coerceIn(0, 255)
-                    )
-                } else {
-                    out[idx] = pixels[idx]
-                }
+                out[idx] = Color.argb(Color.alpha(c), sumR / count, sumG / count, sumB / count)
             }
         }
         return out
     }
 
-    private fun unsharpMask(pixels: IntArray, w: Int, h: Int, radius: Int, amount: Float): IntArray {
-        val blurred = boxBlur(pixels, w, h, radius)
+    private fun combineSharpen(pixels: IntArray, blurred1: IntArray, blurred2: IntArray, w: Int, h: Int, intensity: Float): IntArray {
         val out = IntArray(pixels.size)
+        val amount1 = 1.5f * intensity
+        val amount2 = 0.8f * intensity
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]).toFloat()
             val g = Color.green(pixels[i]).toFloat()
             val b = Color.blue(pixels[i]).toFloat()
-            val br = Color.red(blurred[i]).toFloat()
-            val bg = Color.green(blurred[i]).toFloat()
-            val bb = Color.blue(blurred[i]).toFloat()
+            val br1 = Color.red(blurred1[i]).toFloat()
+            val bg1 = Color.green(blurred1[i]).toFloat()
+            val bb1 = Color.blue(blurred1[i]).toFloat()
+            val br2 = Color.red(blurred2[i]).toFloat()
+            val bg2 = Color.green(blurred2[i]).toFloat()
+            val bb2 = Color.blue(blurred2[i]).toFloat()
+            val dr = r - br1; val dg = g - bg1; val db = b - bb1
+            val mr = r - br2; val mg = g - bg2; val mb = b - bb2
             out[i] = Color.argb(Color.alpha(pixels[i]),
-                (r + (r - br) * amount).roundToInt().coerceIn(0, 255),
-                (g + (g - bg) * amount).roundToInt().coerceIn(0, 255),
-                (b + (b - bb) * amount).roundToInt().coerceIn(0, 255)
+                (r + dr * amount1 + mr * amount2).roundToInt().coerceIn(0, 255),
+                (g + dg * amount1 + mg * amount2).roundToInt().coerceIn(0, 255),
+                (b + db * amount1 + mb * amount2).roundToInt().coerceIn(0, 255)
             )
         }
         return out
     }
 
     private fun localContrast(pixels: IntArray, w: Int, h: Int, amount: Float): IntArray {
-        val blurred = boxBlur(pixels, w, h, maxOf(w, h) / 32)
+        val radius = maxOf(w, h) / 32
+        val blurred = boxBlur(pixels, w, h, radius)
         val out = IntArray(pixels.size)
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]).toFloat()
@@ -121,47 +103,23 @@ object HdEnhancer {
             val lr = Color.red(blurred[i]).toFloat()
             val lg = Color.green(blurred[i]).toFloat()
             val lb = Color.blue(blurred[i]).toFloat()
-            val dr = r - lr; val dg = g - lg; val db = b - lb
             out[i] = Color.argb(Color.alpha(pixels[i]),
-                (r + dr * amount).roundToInt().coerceIn(0, 255),
-                (g + dg * amount).roundToInt().coerceIn(0, 255),
-                (b + db * amount).roundToInt().coerceIn(0, 255)
-            )
-        }
-        return out
-    }
-
-    private fun microDetail(pixels: IntArray, w: Int, h: Int, amount: Float): IntArray {
-        val blurred = boxBlur(pixels, w, h, 1)
-        val out = IntArray(pixels.size)
-        for (i in pixels.indices) {
-            val r = Color.red(pixels[i]).toFloat()
-            val g = Color.green(pixels[i]).toFloat()
-            val b = Color.blue(pixels[i]).toFloat()
-            val br = Color.red(blurred[i]).toFloat()
-            val bg = Color.green(blurred[i]).toFloat()
-            val bb = Color.blue(blurred[i]).toFloat()
-            val detailR = r - br; val detailG = g - bg; val detailB = b - bb
-            val sharpened = 1f + amount * 2f
-            out[i] = Color.argb(Color.alpha(pixels[i]),
-                (r + detailR * amount).roundToInt().coerceIn(0, 255),
-                (g + detailG * amount).roundToInt().coerceIn(0, 255),
-                (b + detailB * amount).roundToInt().coerceIn(0, 255)
+                (r + (r - lr) * amount).roundToInt().coerceIn(0, 255),
+                (g + (g - lg) * amount).roundToInt().coerceIn(0, 255),
+                (b + (b - lb) * amount).roundToInt().coerceIn(0, 255)
             )
         }
         return out
     }
 
     private fun dynamicRangeExpansion(pixels: IntArray, w: Int, h: Int, amount: Float): IntArray {
-        // Compute histogram
         val histR = IntArray(256); val histG = IntArray(256); val histB = IntArray(256)
         val total = w * h
         for (i in pixels.indices) {
             histR[Color.red(pixels[i])]++;
-            histR[Color.green(pixels[i])]++;
-            histR[Color.blue(pixels[i])]++;
+            histG[Color.green(pixels[i])]++;
+            histB[Color.blue(pixels[i])]++;
         }
-        // Find 1% and 99% points
         var lowR = 0; var highR = 255
         var accum = 0
         for (i in 0..255) { accum += histR[i]; if (accum >= total * 0.005f) { lowR = i; break } }
@@ -173,28 +131,25 @@ object HdEnhancer {
         val out = IntArray(pixels.size)
         val range = (highR - lowR).toFloat()
         for (i in pixels.indices) {
-            val nr = ((Color.red(pixels[i]) - lowR) / range * 255f).roundToInt().coerceIn(0, 255)
-            val ng = ((Color.green(pixels[i]) - lowR) / range * 255f).roundToInt().coerceIn(0, 255)
-            val nb = ((Color.blue(pixels[i]) - lowR) / range * 255f).roundToInt().coerceIn(0, 255)
             val or = Color.red(pixels[i]).toFloat()
             val og = Color.green(pixels[i]).toFloat()
             val ob = Color.blue(pixels[i]).toFloat()
+            val nr = ((or - lowR) / range * 255f).roundToInt().coerceIn(0, 255).toFloat()
+            val ng = ((og - lowR) / range * 255f).roundToInt().coerceIn(0, 255).toFloat()
+            val nb = ((ob - lowR) / range * 255f).roundToInt().coerceIn(0, 255).toFloat()
             out[i] = Color.argb(Color.alpha(pixels[i]),
-                lerp(or, nr.toFloat(), amount).roundToInt().coerceIn(0, 255),
-                lerp(og, ng.toFloat(), amount).roundToInt().coerceIn(0, 255),
-                lerp(ob, nb.toFloat(), amount).roundToInt().coerceIn(0, 255)
+                (or + (nr - or) * amount).roundToInt().coerceIn(0, 255),
+                (og + (ng - og) * amount).roundToInt().coerceIn(0, 255),
+                (ob + (nb - ob) * amount).roundToInt().coerceIn(0, 255)
             )
         }
         return out
     }
 
-    private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
-
     private fun boxBlur(pixels: IntArray, w: Int, h: Int, radius: Int): IntArray {
         if (radius <= 0) return pixels.copyOf()
         val out = IntArray(pixels.size)
         val r = min(radius, minOf(w, h) / 4)
-        // Horizontal pass
         val temp = IntArray(pixels.size)
         for (y in 0 until h) {
             var sumR = 0; var sumG = 0; var sumB = 0; var count = 0
@@ -215,7 +170,6 @@ object HdEnhancer {
                 }
             }
         }
-        // Vertical pass
         for (x in 0 until w) {
             var sumR = 0; var sumG = 0; var sumB = 0; var count = 0
             for (y in -r..r) {

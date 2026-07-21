@@ -1,5 +1,6 @@
 ﻿package com.moodcamera.ui.camera
 
+import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -65,7 +66,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -82,6 +85,7 @@ import com.moodcamera.domain.model.EmulationCategory
 import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.ToneType
 import com.moodcamera.processing.enhance.CinematicLut
+import com.moodcamera.processing.engine.PreviewProcessor
 import com.moodcamera.ui.theme.MoodAccent
 import com.moodcamera.ui.theme.MoodBlack
 import com.moodcamera.ui.theme.MoodOnSurfaceVariant
@@ -146,8 +150,21 @@ fun CameraScreen(
         }
     }
 
+    var livePreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
         viewModel.startCamera(lifecycleOwner, previewView)
+    }
+
+    LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature) {
+        val previewBitmap = previewView.bitmap
+        if (previewBitmap != null && previewBitmap.width > 0 && previewBitmap.height > 0) {
+            try {
+                val scaled = Bitmap.createScaledBitmap(previewBitmap, 320, 240, true)
+                val processed = PreviewProcessor.processPreview(scaled, uiState.settings)
+                livePreviewBitmap = processed
+            } catch (_: Exception) {}
+        }
     }
 
     var pinchZoom by remember { mutableFloatStateOf(uiState.currentZoom) }
@@ -184,13 +201,24 @@ fun CameraScreen(
                 }
         )
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(previewHeight)
-                .align(Alignment.TopCenter)
-                .background(uiState.settings.emulationType.previewColor().copy(alpha = 0.08f))
-        )
+        livePreviewBitmap?.let { bitmap ->
+            val imageBitmap = bitmap.asImageBitmap()
+            androidx.compose.foundation.Image(
+                bitmap = imageBitmap,
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(previewHeight)
+                    .align(Alignment.TopCenter)
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            pinchZoom = (pinchZoom * zoom).coerceIn(1f, 10f)
+                        }
+                    },
+                contentScale = ContentScale.Crop,
+                alpha = 0.85f
+            )
+        }
 
         if (uiState.settings.isGridEnabled) {
             GridOverlay(
@@ -201,20 +229,21 @@ fun CameraScreen(
             )
         }
 
-        AnimatedVisibility(
-            visible = uiState.showSceneInfo && uiState.sceneInfo != null,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 56.dp)
-        ) {
-            uiState.sceneInfo?.let { scene ->
-                SceneInfoCard(
-                    sceneInfo = scene,
-                    onApply = { viewModel.applyAutoFilter() },
-                    onDismiss = { viewModel.dismissSceneInfo() }
-                )
+        uiState.autoFilterStatus?.let { status ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MoodAccent.copy(alpha = 0.2f))
+                    .border(0.5.dp, MoodAccent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MoodAccent, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(status, color = MoodAccent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
             }
         }
 
@@ -223,9 +252,6 @@ fun CameraScreen(
             onFlashToggle = { viewModel.toggleFlash() },
             onAutoFilterToggle = {
                 viewModel.toggleAutoFilter()
-                if (!uiState.settings.isAutoFilterEnabled) {
-                    viewModel.captureForAnalysis(previewView)
-                }
             },
             onGridToggle = { viewModel.toggleGrid() },
             onFilterToggle = {
@@ -627,40 +653,6 @@ private fun ToggleChip(label: String, enabled: Boolean, onToggle: () -> Unit, mo
         contentAlignment = Alignment.Center
     ) {
         Text(text = label, color = if (enabled) MoodAccent else Color.White.copy(alpha = 0.8f), fontSize = 11.sp, fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal)
-    }
-}
-@Composable
-private fun SceneInfoCard(
-    sceneInfo: com.moodcamera.domain.model.SceneInfo,
-    onApply: () -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .padding(horizontal = 48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(GlassBgHeavy)
-            .border(0.5.dp, GlassBorder, RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MoodAccent, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Recommended: ", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            if (sceneInfo.detectedLabels.isNotEmpty()) {
-                Text(text = sceneInfo.detectedLabels.take(3).joinToString(", ") { it.text }, color = MoodOnSurfaceVariant, fontSize = 12.sp)
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Dismiss", color = MoodOnSurfaceVariant, fontSize = 14.sp, modifier = Modifier.clickable(onClick = onDismiss).padding(8.dp))
-                Box(
-                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(MoodAccent).clickable(onClick = onApply).padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(text = "Apply", color = MoodBlack, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
     }
 }
 

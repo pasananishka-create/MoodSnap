@@ -60,9 +60,7 @@ object ImageProcessor {
         src.setPixels(pixels, 0, width, 0, 0, width, height)
 
         var result = src
-        result = applyContrastMatrix(result, settings.contrast)
-        result = applyBrightnessMatrix(result, settings.brightness)
-        result = applyTemperatureMatrix(result, settings.temperature, settings.tint)
+        result = applyCombinedMatrix(result, settings.contrast, settings.brightness, settings.temperature, settings.tint)
 
         if (settings.isGrainEnabled && quality.grainMultiplier > 0f) {
             val g = FilmGrain.applyGrain(result, quality.grainMultiplier)
@@ -537,50 +535,23 @@ object ImageProcessor {
         }
     }
 
-    // ── Hardware-accelerated adjustments ───────────────────────────
+    // ── Combined hardware-accelerated adjustments (single Canvas pass) ──────
 
-    private fun applyContrastMatrix(bitmap: Bitmap, contrast: Float): Bitmap {
-        if (contrast == 1f) return bitmap
-        val t = -0.5f * contrast + 0.5f
-        val paint = Paint().apply {
-            colorFilter = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
-                contrast, 0f, 0f, 0f, t,
-                0f, contrast, 0f, 0f, t,
-                0f, 0f, contrast, 0f, t,
-                0f, 0f, 0f, 1f, 0f
-            )))
-        }
-        val result = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        Canvas(result).drawBitmap(bitmap, 0f, 0f, paint)
-        return result
-    }
+    private fun applyCombinedMatrix(bitmap: Bitmap, contrast: Float, brightness: Float, temp: Float, tint: Float): Bitmap {
+        if (contrast == 1f && brightness == 0f && temp == 0f && tint == 0f) return bitmap
 
-    private fun applyBrightnessMatrix(bitmap: Bitmap, brightness: Float): Bitmap {
-        if (brightness == 0f) return bitmap
-        val s = brightness * 255f
-        val paint = Paint().apply {
-            colorFilter = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
-                1f, 0f, 0f, 0f, s,
-                0f, 1f, 0f, 0f, s,
-                0f, 0f, 1f, 0f, s,
-                0f, 0f, 0f, 1f, 0f
-            )))
-        }
-        val result = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        Canvas(result).drawBitmap(bitmap, 0f, 0f, paint)
-        return result
-    }
-
-    private fun applyTemperatureMatrix(bitmap: Bitmap, temp: Float, tint: Float): Bitmap {
-        if (temp == 0f && tint == 0f) return bitmap
+        val c = contrast
+        val t = -0.5f * c + 0.5f
+        val br = brightness * 255f
         val tr = temp * 0.08f
         val tb = -temp * 0.08f
         val tg = tint * 0.04f
+
         val paint = Paint().apply {
             colorFilter = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
-                1f + tr, 0f, 0f, 0f, tr * 80f,
-                0f, 1f + tg, 0f, 0f, tg * 60f,
-                0f, 0f, 1f + tb, 0f, tb * 80f,
+                c + tr, 0f, 0f, 0f, t + tr * 80f + br,
+                0f, c + tg, 0f, 0f, t + tg * 60f + br,
+                0f, 0f, c + tb, 0f, t + tb * 80f + br,
                 0f, 0f, 0f, 1f, 0f
             )))
         }
@@ -593,34 +564,22 @@ object ImageProcessor {
         val w = bitmap.width
         val h = bitmap.height
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val pixels = IntArray(w * h)
-        result.getPixels(pixels, 0, w, 0, 0, w, h)
+        val canvas = Canvas(result)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
         val cx = w / 2f
         val cy = h / 2f
-        val maxDist = sqrt(cx * cx + cy * cy)
-        val maxSq = maxDist * maxDist
-        val radSq = maxSq * 0.75f
-        for (y in 0 until h) {
-            val dy = y - cy
-            val dySq = dy * dy
-            for (x in 0 until w) {
-                val dx = x - cx
-                val distSq = dx * dx + dySq
-                val vig = if (distSq < radSq) 1f else {
-                    val t = (distSq - radSq) / (maxSq - radSq)
-                    (1f - t * t * intensity).coerceIn(0f, 1f)
-                }
-                val i = y * w + x
-                val px = pixels[i]
-                pixels[i] = Color.argb(
-                    Color.alpha(px),
-                    (Color.red(px) * vig).roundToInt().coerceIn(0, 255),
-                    (Color.green(px) * vig).roundToInt().coerceIn(0, 255),
-                    (Color.blue(px) * vig).roundToInt().coerceIn(0, 255)
-                )
-            }
-        }
-        result.setPixels(pixels, 0, w, 0, 0, w, h)
+        val maxRadius = kotlin.math.sqrt(cx * cx + cy * cy)
+
+        paint.shader = android.graphics.RadialGradient(
+            cx, cy, maxRadius,
+            intArrayOf(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT, android.graphics.Color.BLACK),
+            floatArrayOf(0f, (1f - intensity * 0.7f).coerceIn(0f, 1f), 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
+
         return result
     }
 }
