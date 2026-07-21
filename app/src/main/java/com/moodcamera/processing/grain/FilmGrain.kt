@@ -2,7 +2,7 @@ package com.moodcamera.processing.grain
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import kotlin.random.Random
+import java.util.Random
 
 object FilmGrain {
 
@@ -24,10 +24,8 @@ object FilmGrain {
             var g = Color.green(pixel)
             var b = Color.blue(pixel)
 
-            // Generate grain noise
-            val noise = (random.nextGaussian().toFloat() * grainStrength).toInt()
+            val noise = (random.nextGaussian() * grainStrength).toInt()
 
-            // Apply luminance-dependent grain (more grain in midtones)
             val luma = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f
             val lumaFactor = 1f - kotlin.math.abs(luma - 0.5f) * 2f
 

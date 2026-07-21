@@ -2,10 +2,8 @@ package com.moodcamera.data.model
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import kotlinx.serialization.Serializable
 
 @Entity(tableName = "presets")
-@Serializable
 data class PresetEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

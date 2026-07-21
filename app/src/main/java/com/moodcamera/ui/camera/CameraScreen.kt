@@ -1,9 +1,5 @@
 package com.moodcamera.ui.camera
 
-import android.util.Log
-import android.view.SurfaceHolder
-import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +8,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,13 +20,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.GridView
@@ -51,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -60,11 +51,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.camera.view.PreviewView
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.LifecycleOwner
 import com.moodcamera.domain.model.AspectRatio
 import com.moodcamera.domain.model.EmulationType
-import com.moodcamera.domain.model.ToneType
 import com.moodcamera.ui.theme.MoodAccent
 import com.moodcamera.ui.theme.MoodBlack
 import com.moodcamera.ui.theme.MoodOnSurfaceVariant
@@ -80,20 +70,14 @@ fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val surfaceRequest = remember { androidx.compose.runtime.mutableStateOf<SurfaceRequest?>(null) }
-
-    val preview = remember {
-        Preview.Builder().build().also { preview ->
-            preview.setSurfaceProvider { request ->
-                surfaceRequest.value = request
-            }
+    val previewView = remember {
+        PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
 
-    LaunchedEffect(lifecycleOwner) {
-        viewModel.startCamera(lifecycleOwner, preview) { request ->
-            surfaceRequest.value = request
-        }
+    LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
+        viewModel.startCamera(lifecycleOwner, previewView)
     }
 
     Box(
@@ -102,21 +86,10 @@ fun CameraScreen(
             .background(MoodBlack)
     ) {
         // Camera Preview
-        surfaceRequest.value?.let { request ->
-            AndroidView(
-                factory = { ctx ->
-                    val previewView = androidx.camera.view.PreviewView(ctx).apply {
-                        implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
-                        scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
-                    }
-                    previewView
-                },
-                modifier = Modifier.fillMaxSize(),
-                update = { previewView ->
-                    previewView.surfaceProvider?.onSurfaceRequest(request)
-                }
-            )
-        }
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier.fillMaxSize()
+        )
 
         // Grid overlay
         if (uiState.settings.isGridEnabled) {
@@ -133,12 +106,14 @@ fun CameraScreen(
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // Scene info overlay (auto-filter recommendation)
+        // Scene info overlay
         AnimatedVisibility(
             visible = uiState.showSceneInfo && uiState.sceneInfo != null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 120.dp)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 120.dp)
         ) {
             uiState.sceneInfo?.let { scene ->
                 SceneInfoCard(
@@ -155,14 +130,6 @@ fun CameraScreen(
             onSelect = { viewModel.updateEmulation(it) },
             modifier = Modifier.align(Alignment.CenterStart)
         )
-
-        // Exposure indicator
-        if (uiState.settings.exposureCompensation != 0f) {
-            ExposureIndicator(
-                exposure = uiState.settings.exposureCompensation,
-                modifier = Modifier.align(Alignment.CenterEnd)
-            )
-        }
 
         // Bottom controls
         CameraBottomBar(
@@ -187,7 +154,9 @@ fun CameraScreen(
             }
             ErrorToast(
                 message = error,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 160.dp)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 160.dp)
             )
         }
     }
@@ -210,7 +179,6 @@ private fun CameraTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Flash
         IconButton(onClick = onFlashToggle) {
             Icon(
                 imageVector = if (uiState.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
@@ -219,7 +187,6 @@ private fun CameraTopBar(
             )
         }
 
-        // Auto-filter toggle
         IconButton(onClick = onAutoFilterToggle) {
             Icon(
                 imageVector = Icons.Default.AutoAwesome,
@@ -228,7 +195,6 @@ private fun CameraTopBar(
             )
         }
 
-        // Grid toggle
         IconButton(onClick = onGridToggle) {
             Icon(
                 imageVector = Icons.Default.GridView,
@@ -237,7 +203,6 @@ private fun CameraTopBar(
             )
         }
 
-        // Aspect ratio cycle
         AspectRatioButton(
             ratio = uiState.settings.aspectRatio,
             onClick = {
@@ -312,34 +277,9 @@ private fun EmulationSelector(
                 color = MoodOnSurfaceVariant,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(4.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun ExposureIndicator(
-    exposure: Float,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .background(MoodBlack.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "EV",
-                color = MoodOnSurfaceVariant,
-                fontSize = 10.sp
-            )
-            Text(
-                text = if (exposure > 0) "+${String.format("%.1f", exposure)}" else String.format("%.1f", exposure),
-                color = MoodAccent,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp)
             )
         }
     }
@@ -388,14 +328,14 @@ private fun SceneInfoCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = "Dismiss",
                     color = MoodOnSurfaceVariant,
                     fontSize = 14.sp,
-                    modifier = Modifier.clickable(onClick = onDismiss).padding(8.dp)
+                    modifier = Modifier
+                        .clickable(onClick = onDismiss)
+                        .padding(8.dp)
                 )
 
                 Box(
@@ -447,11 +387,7 @@ private fun CameraBottomBar(
                 },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "-3",
-                color = MoodOnSurfaceVariant,
-                fontSize = 10.sp
-            )
+            Text(text = "-3", color = MoodOnSurfaceVariant, fontSize = 10.sp)
 
             LinearProgressIndicator(
                 progress = { ((uiState.settings.exposureCompensation + 3f) / 6f) },
@@ -463,11 +399,7 @@ private fun CameraBottomBar(
                 trackColor = MoodSurfaceVariant
             )
 
-            Text(
-                text = "+3",
-                color = MoodOnSurfaceVariant,
-                fontSize = 10.sp
-            )
+            Text(text = "+3", color = MoodOnSurfaceVariant, fontSize = 10.sp)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -478,11 +410,7 @@ private fun CameraBottomBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Gallery thumbnail
-            IconButton(
-                onClick = onGalleryClick,
-                modifier = Modifier.size(48.dp)
-            ) {
+            IconButton(onClick = onGalleryClick, modifier = Modifier.size(48.dp)) {
                 Icon(
                     imageVector = Icons.Default.PhotoLibrary,
                     contentDescription = "Gallery",
@@ -491,7 +419,6 @@ private fun CameraBottomBar(
                 )
             }
 
-            // Capture button
             Box(
                 modifier = Modifier
                     .size(72.dp)
@@ -517,11 +444,7 @@ private fun CameraBottomBar(
                 }
             }
 
-            // Switch camera
-            IconButton(
-                onClick = onSwitchCamera,
-                modifier = Modifier.size(48.dp)
-            ) {
+            IconButton(onClick = onSwitchCamera, modifier = Modifier.size(48.dp)) {
                 Icon(
                     imageVector = Icons.Default.SwapHoriz,
                     contentDescription = "Switch Camera",
@@ -531,7 +454,6 @@ private fun CameraBottomBar(
             }
         }
 
-        // Film emulation name
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = uiState.settings.emulationType.displayName,
@@ -545,7 +467,6 @@ private fun CameraBottomBar(
 @Composable
 private fun GridOverlay(modifier: Modifier = Modifier) {
     Box(modifier = modifier) {
-        // Vertical lines
         for (i in 1..2) {
             Box(
                 modifier = Modifier
@@ -555,7 +476,6 @@ private fun GridOverlay(modifier: Modifier = Modifier) {
                     .background(Color.White.copy(alpha = 0.3f))
             )
         }
-        // Horizontal lines
         for (i in 1..2) {
             Box(
                 modifier = Modifier
@@ -583,29 +503,18 @@ private fun ProcessingOverlay(modifier: Modifier = Modifier) {
                 strokeWidth = 3.dp
             )
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Processing...",
-                color = MoodAccent,
-                fontSize = 16.sp
-            )
+            Text(text = "Processing...", color = MoodAccent, fontSize = 16.sp)
         }
     }
 }
 
 @Composable
-private fun ErrorToast(
-    message: String,
-    modifier: Modifier = Modifier
-) {
+private fun ErrorToast(message: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .background(MoodSurface, RoundedCornerShape(12.dp))
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(
-            text = message,
-            color = Color(0xFFCF6679),
-            fontSize = 14.sp
-        )
+        Text(text = message, color = Color(0xFFCF6679), fontSize = 14.sp)
     }
 }

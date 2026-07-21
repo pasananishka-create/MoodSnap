@@ -3,14 +3,13 @@ package com.moodcamera.ui.camera
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -30,7 +29,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,7 +41,6 @@ data class CameraUiState(
     val lastPhotoPath: String? = null,
     val sceneInfo: SceneInfo? = null,
     val showSceneInfo: Boolean = false,
-    val availableZoomLevels: List<Float> = emptyList(),
     val currentZoom: Float = 1f,
     val hasFlashUnit: Boolean = false,
     val flashEnabled: Boolean = false,
@@ -74,17 +71,10 @@ class CameraViewModel @Inject constructor(
         }
     }
 
-    fun startCamera(
-        lifecycleOwner: LifecycleOwner,
-        preview: Preview,
-        onSurfaceProviderReady: (Preview.SurfaceProvider) -> Unit
-    ) {
+    fun startCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         val context = getApplication<Application>()
 
-        preview.setSurfaceProvider { surfaceRequest ->
-            onSurfaceProviderReady(surfaceRequest)
-        }
-
+        val preview = Preview.Builder().build()
         imageCapture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
@@ -92,11 +82,15 @@ class CameraViewModel @Inject constructor(
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
-            bindCamera(lifecycleOwner, preview)
+            bindCamera(lifecycleOwner, preview, previewView)
         }, ContextCompat.getMainExecutor(context))
     }
 
-    private fun bindCamera(lifecycleOwner: LifecycleOwner, preview: Preview) {
+    private fun bindCamera(
+        lifecycleOwner: LifecycleOwner,
+        preview: Preview,
+        previewView: PreviewView
+    ) {
         val provider = cameraProvider ?: return
         val capture = imageCapture ?: return
 
@@ -108,6 +102,7 @@ class CameraViewModel @Inject constructor(
 
         try {
             provider.unbindAll()
+            preview.setSurfaceProvider(previewView.surfaceProvider)
             camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
@@ -119,8 +114,7 @@ class CameraViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         hasFlashUnit = cam.cameraInfo.hasFlashUnit(),
-                        currentZoom = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f,
-                        availableZoomLevels = computeZoomLevels(cam)
+                        currentZoom = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f
                     )
                 }
 
@@ -133,19 +127,6 @@ class CameraViewModel @Inject constructor(
         }
     }
 
-    private fun computeZoomLevels(cam: Camera): List<Float> {
-        val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
-        val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
-        val levels = mutableListOf<Float>()
-        var zoom = minZoom
-        while (zoom <= maxZoom) {
-            levels.add(zoom)
-            zoom *= 2f
-        }
-        if (levels.lastOrNull() != maxZoom) levels.add(maxZoom)
-        return levels
-    }
-
     fun takePhoto() {
         val capture = imageCapture ?: return
         if (_uiState.value.isCapturing) return
@@ -153,7 +134,6 @@ class CameraViewModel @Inject constructor(
         _uiState.update { it.copy(isCapturing = true) }
 
         val tempFile = photoRepository.createTempPhotoFile()
-
         val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
 
         capture.takePicture(
@@ -191,7 +171,6 @@ class CameraViewModel @Inject constructor(
                 }
 
                 val settings = _uiState.value.settings
-
                 val processedBitmap = ImageProcessor.processImage(
                     original = originalBitmap,
                     settings = settings,
@@ -237,18 +216,11 @@ class CameraViewModel @Inject constructor(
 
     fun analyzeScene(bitmap: Bitmap) {
         if (!_uiState.value.settings.isAutoFilterEnabled) return
-
         viewModelScope.launch {
             try {
                 val sceneInfo = sceneAnalyzer.analyzeScene(bitmap)
-                _uiState.update {
-                    it.copy(
-                        sceneInfo = sceneInfo,
-                        showSceneInfo = true
-                    )
-                }
-            } catch (_: Exception) {
-            }
+                _uiState.update { it.copy(sceneInfo = sceneInfo, showSceneInfo = true) }
+            } catch (_: Exception) { }
         }
     }
 
@@ -256,9 +228,7 @@ class CameraViewModel @Inject constructor(
         val sceneInfo = _uiState.value.sceneInfo ?: return
         _uiState.update {
             it.copy(
-                settings = it.settings.copy(
-                    emulationType = sceneInfo.recommendedEmulation
-                ),
+                settings = it.settings.copy(emulationType = sceneInfo.recommendedEmulation),
                 showSceneInfo = false
             )
         }
@@ -269,16 +239,12 @@ class CameraViewModel @Inject constructor(
     }
 
     fun updateEmulation(type: EmulationType) {
-        _uiState.update {
-            it.copy(settings = it.settings.copy(emulationType = type))
-        }
+        _uiState.update { it.copy(settings = it.settings.copy(emulationType = type)) }
     }
 
     fun updateExposure(value: Float) {
         camera?.cameraControl?.setExposureCompensationIndex(value.toInt())
-        _uiState.update {
-            it.copy(settings = it.settings.copy(exposureCompensation = value))
-        }
+        _uiState.update { it.copy(settings = it.settings.copy(exposureCompensation = value)) }
     }
 
     fun toggleFlash() {
@@ -288,23 +254,16 @@ class CameraViewModel @Inject constructor(
     }
 
     fun cycleZoom() {
-        val levels = _uiState.value.availableZoomLevels
-        if (levels.isEmpty()) return
-
+        val cam = camera ?: return
         val current = _uiState.value.currentZoom
-        val currentIndex = levels.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
-        val nextIndex = if (currentIndex >= 0 && currentIndex < levels.size - 1) {
-            currentIndex + 1
-        } else 0
-
-        camera?.cameraControl?.setZoomRatio(levels[nextIndex])
+        val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+        val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 5f
+        val newZoom = if (current >= maxZoom) minZoom else current * 2f
+        cam.cameraControl.setZoomRatio(newZoom)
     }
 
     fun toggleFrontCamera() {
-        val newFront = !_uiState.value.settings.isFrontCamera
-        _uiState.update {
-            it.copy(settings = it.settings.copy(isFrontCamera = newFront))
-        }
+        _uiState.update { it.copy(settings = it.settings.copy(isFrontCamera = !it.settings.isFrontCamera)) }
     }
 
     fun toggleAutoFilter() {
@@ -319,16 +278,11 @@ class CameraViewModel @Inject constructor(
     }
 
     fun toggleGrid() {
-        val newState = !_uiState.value.settings.isGridEnabled
-        _uiState.update {
-            it.copy(settings = it.settings.copy(isGridEnabled = newState))
-        }
+        _uiState.update { it.copy(settings = it.settings.copy(isGridEnabled = !it.settings.isGridEnabled)) }
     }
 
     fun updateAspectRatio(ratio: AspectRatio) {
-        _uiState.update {
-            it.copy(settings = it.settings.copy(aspectRatio = ratio))
-        }
+        _uiState.update { it.copy(settings = it.settings.copy(aspectRatio = ratio)) }
     }
 
     fun clearError() {
