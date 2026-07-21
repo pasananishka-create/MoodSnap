@@ -7,22 +7,22 @@ enum class EmulationType(
 ) {
     CLARENDON(
         displayName = "Clarendon",
-        description = "Bright, vivid, high contrast",
+        description = "Vivid, high contrast, cool shadows",
         category = EmulationCategory.INSTAGRAM
     ),
     JUNO(
         displayName = "Juno",
-        description = "Warm highlights, cool shadows",
+        description = "Warm highlights, vivid reds",
         category = EmulationCategory.INSTAGRAM
     ),
     LARK(
         displayName = "Lark",
-        description = "Bright, desaturated reds, airy",
+        description = "Bright, airy, desaturated reds",
         category = EmulationCategory.INSTAGRAM
     ),
     VALENCIA(
         displayName = "Valencia",
-        description = "Warm faded vintage tone",
+        description = "Warm faded vintage amber",
         category = EmulationCategory.INSTAGRAM
     ),
     HUDSON(
@@ -35,64 +35,94 @@ enum class EmulationType(
         description = "Dusty vintage, washed out",
         category = EmulationCategory.INSTAGRAM
     ),
+    GINGHAM(
+        displayName = "Gingham",
+        description = "Washed-out, soft, slightly warm",
+        category = EmulationCategory.INSTAGRAM
+    ),
+    ADEN(
+        displayName = "Aden",
+        description = "Soft pastel, desaturated, warm",
+        category = EmulationCategory.INSTAGRAM
+    ),
+    LUDWIG(
+        displayName = "Ludwig",
+        description = "Warm, slight vignette, golden",
+        category = EmulationCategory.INSTAGRAM
+    ),
+    CREMA(
+        displayName = "Crema",
+        description = "Creamy warm, soft contrast",
+        category = EmulationCategory.INSTAGRAM
+    ),
     PORTRA(
-        displayName = "Portra",
-        description = "Soft warm skin tones",
+        displayName = "Portra 400",
+        description = "Soft warm skin tones, natural",
         category = EmulationCategory.FILMIC
     ),
-    CINESTILL_800T(
-        displayName = "Cinestill",
-        description = "Tungsten cinema, halation glow",
-        category = EmulationCategory.CINEMATIC
-    ),
-    KODACHROME(
-        displayName = "Kodachrome",
-        description = "Classic warm slide film",
-        category = EmulationCategory.CINEMATIC
+    PORTRA_800(
+        displayName = "Portra 800",
+        description = "Punchy warm, high speed film",
+        category = EmulationCategory.FILMIC
     ),
     GOLD_200(
-        displayName = "Gold",
+        displayName = "Gold 200",
         description = "Warm golden consumer film",
         category = EmulationCategory.FILMIC
     ),
     ULTRAMAX(
         displayName = "Ultramax",
-        description = "Rich saturated punchy film",
+        description = "Rich saturated punchy colors",
         category = EmulationCategory.FILMIC
     ),
     EKTAR(
-        displayName = "Ektar",
-        description = "Vivid saturated colors",
+        displayName = "Ektar 100",
+        description = "Ultra vivid saturated film",
         category = EmulationCategory.FILMIC
     ),
-    VELVIA(
-        displayName = "Velvia",
-        description = "Ultra vivid landscapes",
-        category = EmulationCategory.NATURAL
+    FILM35(
+        displayName = "35mm",
+        description = "Nostalgic warm film tones",
+        category = EmulationCategory.FILMIC
     ),
-    TRI_X(
-        displayName = "Tri-X",
-        description = "High contrast B&W",
-        category = EmulationCategory.STYLISTIC
+    FUJI_400H(
+        displayName = "Fuji 400H",
+        description = "Soft airy pastel film",
+        category = EmulationCategory.FILMIC
     ),
-    HP5(
-        displayName = "HP5+",
-        description = "Gritty versatile B&W",
-        category = EmulationCategory.STYLISTIC
+    FUJI_SUPERIA(
+        displayName = "Superia",
+        description = "Vivid green-biased consumer film",
+        category = EmulationCategory.FILMIC
     ),
-    ARIZONA(
-        displayName = "Arizona",
-        description = "Warm desert Wes Anderson",
-        category = EmulationCategory.STYLISTIC
+    FUJI_PROVIA(
+        displayName = "Provia",
+        description = "Balanced slide film, punchy",
+        category = EmulationCategory.FILMIC
     ),
-    METRO(
-        displayName = "Metro",
-        description = "Cool desaturated urban",
-        category = EmulationCategory.STYLISTIC
+    FUJI_NATURA(
+        displayName = "Natura",
+        description = "Soft natural light film",
+        category = EmulationCategory.FILMIC
+    ),
+    CINESTILL_800T(
+        displayName = "Cinestill 800T",
+        description = "Tungsten cinema film, halation",
+        category = EmulationCategory.CINEMATIC
+    ),
+    KODACHROME(
+        displayName = "Kodachrome",
+        description = "Classic warm slide film, punchy",
+        category = EmulationCategory.CINEMATIC
+    ),
+    EKTACHROME(
+        displayName = "Ektachrome",
+        description = "Cool slide film, vivid blues",
+        category = EmulationCategory.CINEMATIC
     ),
     CINEMATIC_TEAL_ORANGE(
         displayName = "Teal & Orange",
-        description = "Hollywood blockbuster look",
+        description = "Hollywood blockbuster split-tone",
         category = EmulationCategory.CINEMATIC
     ),
     NIGHTFADE(
@@ -102,35 +132,45 @@ enum class EmulationType(
     ),
     ROSEWOOD(
         displayName = "Rosewood",
-        description = "Deep red warm cinematic",
-        category = EmulationCategory.CINEMATIC
-    ),
-    FILM35(
-        displayName = "35mm",
-        description = "Nostalgic warm film grain",
-        category = EmulationCategory.FILMIC
-    ),
-    FUJI_400H(
-        displayName = "Fuji 400H",
-        description = "Soft airy pastels",
-        category = EmulationCategory.FILMIC
-    ),
-    EKTACHROME(
-        displayName = "Ektachrome",
-        description = "Cool slide, punchy blues",
+        description = "Deep magenta cinematic warmth",
         category = EmulationCategory.CINEMATIC
     ),
     AGFA_VISTA(
-        displayName = "Agfa",
-        description = "Punchy red-biased color",
+        displayName = "Agfa Vista",
+        description = "Punchy red-biased color film",
         category = EmulationCategory.CINEMATIC
+    ),
+    VELVIA(
+        displayName = "Velvia 50",
+        description = "Ultra vivid landscape slide film",
+        category = EmulationCategory.NATURAL
+    ),
+    TRI_X(
+        displayName = "Tri-X 400",
+        description = "High contrast classic B&W",
+        category = EmulationCategory.STYLISTIC
+    ),
+    HP5(
+        displayName = "HP5+",
+        description = "Versatile grainy B&W film",
+        category = EmulationCategory.STYLISTIC
+    ),
+    ARIZONA(
+        displayName = "Arizona",
+        description = "Warm desert, Wes Anderson",
+        category = EmulationCategory.STYLISTIC
+    ),
+    METRO(
+        displayName = "Metro",
+        description = "Cool desaturated urban tones",
+        category = EmulationCategory.STYLISTIC
     )
 }
 
-enum class EmulationCategory {
-    FILMIC,
-    NATURAL,
-    CINEMATIC,
-    STYLISTIC,
-    INSTAGRAM
+enum class EmulationCategory(val label: String) {
+    FILMIC("Film"),
+    NATURAL("Natural"),
+    CINEMATIC("Cinema"),
+    STYLISTIC("Style"),
+    INSTAGRAM("Social")
 }

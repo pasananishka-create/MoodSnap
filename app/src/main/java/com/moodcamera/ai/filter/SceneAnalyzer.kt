@@ -106,10 +106,10 @@ class SceneAnalyzer @Inject constructor(
             isMonochromeSubject -> EmulationType.TRI_X
             hasPerson -> EmulationType.PORTRA
             isNight -> EmulationType.CINESTILL_800T
-            isFood -> EmulationType.GOLD_200
+            isFood -> EmulationType.LUDWIG
             isLandscape -> EmulationType.VELVIA
             isUrban -> EmulationType.METRO
-            isIndoor -> EmulationType.ARIZONA
+            isIndoor -> EmulationType.CREMA
             else -> EmulationType.CLARENDON
         }
     }

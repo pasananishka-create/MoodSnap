@@ -1,6 +1,8 @@
-package com.moodcamera.ui.camera
+﻿package com.moodcamera.ui.camera
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -13,6 +15,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -22,11 +25,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,7 +41,6 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,15 +54,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,6 +77,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.camera.view.PreviewView
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.moodcamera.domain.model.AspectRatio
+import com.moodcamera.domain.model.EmulationCategory
 import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.ToneType
 import com.moodcamera.ui.theme.MoodAccent
@@ -77,50 +86,46 @@ import com.moodcamera.ui.theme.MoodBlack
 import com.moodcamera.ui.theme.MoodOnSurfaceVariant
 import com.moodcamera.ui.theme.MoodSurface
 import com.moodcamera.ui.theme.MoodSurfaceVariant
+import kotlin.math.roundToInt
 
-private fun EmulationType.overlayColor(): Color = when (this) {
-    // Instagram - strong tints
-    EmulationType.CLARENDON -> Color(0x20FF9966)
-    EmulationType.JUNO -> Color(0x20FFAA33)
-    EmulationType.LARK -> Color(0x1888DDAA)
-    EmulationType.VALENCIA -> Color(0x20DD8844)
-    EmulationType.HUDSON -> Color(0x204488CC)
-    EmulationType.REYES -> Color(0x25CCBB99)
-    // Filmic
-    EmulationType.PORTRA -> Color(0x18FFB38A)
-    EmulationType.GOLD_200 -> Color(0x20DDAA33)
-    EmulationType.ULTRAMAX -> Color(0x18DD6644)
-    EmulationType.FUJI_400H -> Color(0x1588CCBB)
-    EmulationType.FILM35 -> Color(0x18DD9955)
-    // Cinematic
-    EmulationType.CINESTILL_800T -> Color(0x202244AA)
-    EmulationType.KODACHROME -> Color(0x20CC8822)
-    EmulationType.EKTACHROME -> Color(0x184488CC)
-    EmulationType.CINEMATIC_TEAL_ORANGE -> Color(0x222288AA)
-    EmulationType.NIGHTFADE -> Color(0x202244BB)
-    EmulationType.ROSEWOOD -> Color(0x20AA4466)
-    EmulationType.AGFA_VISTA -> Color(0x20FF3366)
-    // Natural
-    EmulationType.VELVIA -> Color(0x18FF8800)
-    // Stylistic
-    EmulationType.TRI_X -> Color(0x38808080)
-    EmulationType.HP5 -> Color(0x28787878)
-    EmulationType.ARIZONA -> Color(0x20DD9944)
-    EmulationType.METRO -> Color(0x184466AA)
-    EmulationType.EKTAR -> Color(0x18FF4444)
+private val GlassBg = Color(0x55000000)
+private val GlassBorder = Color(0x22FFFFFF)
+private val GlassBgHeavy = Color(0x77000000)
+
+private fun EmulationType.previewColor(): Color = when (this) {
+    EmulationType.CLARENDON -> Color(0xFF4499DD)
+    EmulationType.JUNO -> Color(0xFFFFAA33)
+    EmulationType.LARK -> Color(0xFF88CCBB)
+    EmulationType.VALENCIA -> Color(0xFFCC8844)
+    EmulationType.HUDSON -> Color(0xFF4488CC)
+    EmulationType.REYES -> Color(0xFFCCBB99)
+    EmulationType.GINGHAM -> Color(0xFFBBCCBB)
+    EmulationType.ADEN -> Color(0xFFCCBBAA)
+    EmulationType.LUDWIG -> Color(0xFFCC9955)
+    EmulationType.CREMA -> Color(0xFFCCBB88)
+    EmulationType.PORTRA -> Color(0xFFFFB38A)
+    EmulationType.PORTRA_800 -> Color(0xFFFFAA77)
+    EmulationType.GOLD_200 -> Color(0xFFDDAA33)
+    EmulationType.ULTRAMAX -> Color(0xFFCC5533)
+    EmulationType.EKTAR -> Color(0xFFEE3333)
+    EmulationType.FILM35 -> Color(0xFFDD9955)
+    EmulationType.FUJI_400H -> Color(0xFF88CCBB)
+    EmulationType.FUJI_SUPERIA -> Color(0xFF55AA55)
+    EmulationType.FUJI_PROVIA -> Color(0xFF3377CC)
+    EmulationType.FUJI_NATURA -> Color(0xFF88AA88)
+    EmulationType.CINESTILL_800T -> Color(0xFF2244AA)
+    EmulationType.KODACHROME -> Color(0xFFCC8822)
+    EmulationType.EKTACHROME -> Color(0xFF2266CC)
+    EmulationType.CINEMATIC_TEAL_ORANGE -> Color(0xFF2288AA)
+    EmulationType.NIGHTFADE -> Color(0xFF2244BB)
+    EmulationType.ROSEWOOD -> Color(0xFFAA4466)
+    EmulationType.AGFA_VISTA -> Color(0xFFEE3366)
+    EmulationType.VELVIA -> Color(0xFFFF6600)
+    EmulationType.TRI_X -> Color(0xFF808080)
+    EmulationType.HP5 -> Color(0xFF787878)
+    EmulationType.ARIZONA -> Color(0xFFDD9944)
+    EmulationType.METRO -> Color(0xFF4466AA)
 }
-
-private fun EmulationType.overlayBlendColor(): Color = when (this) {
-    EmulationType.TRI_X -> Color(0x28000000)
-    EmulationType.HP5 -> Color(0x20000000)
-    EmulationType.NIGHTFADE -> Color(0x18000022)
-    EmulationType.CINESTILL_800T -> Color(0x15000033)
-    EmulationType.HUDSON -> Color(0x12000022)
-    EmulationType.REYES -> Color(0x15000000)
-    EmulationType.METRO -> Color(0x12000033)
-    else -> Color.Transparent
-}
-
 @Composable
 fun CameraScreen(
     onNavigateToGallery: () -> Unit,
@@ -129,6 +134,7 @@ fun CameraScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val density = LocalDensity.current
 
     var showFilterBar by remember { mutableStateOf(false) }
     var showAdjustPanel by remember { mutableStateOf(false) }
@@ -143,10 +149,19 @@ fun CameraScreen(
         viewModel.startCamera(lifecycleOwner, previewView)
     }
 
-    var pinchZoom by remember { mutableStateOf(uiState.currentZoom) }
+    var pinchZoom by remember { mutableFloatStateOf(uiState.currentZoom) }
+    LaunchedEffect(pinchZoom) { viewModel.setZoomRatio(pinchZoom) }
 
-    LaunchedEffect(pinchZoom) {
-        viewModel.setZoomRatio(pinchZoom)
+    val aspectRatio = uiState.settings.aspectRatio
+    val screenW = with(density) { context.resources.displayMetrics.widthPixels.toDp() }
+    val screenH = with(density) { context.resources.displayMetrics.heightPixels.toDp() }
+
+    val previewHeight = when (aspectRatio) {
+        AspectRatio.SIXTEEN_NINE -> screenH
+        AspectRatio.FOUR_THREE -> screenH
+        AspectRatio.SQUARE -> screenW
+        AspectRatio.THREE_TWO -> screenH * 0.85f
+        AspectRatio.XPAN -> screenH * 0.55f
     }
 
     Box(
@@ -158,31 +173,31 @@ fun CameraScreen(
         AndroidView(
             factory = { previewView },
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .height(previewHeight)
+                .align(Alignment.TopCenter)
                 .pointerInput(Unit) {
                     detectTransformGestures { _, _, zoom, _ ->
-                        val newZoom = (pinchZoom * zoom).coerceIn(1f, 10f)
-                        pinchZoom = newZoom
+                        pinchZoom = (pinchZoom * zoom).coerceIn(1f, 10f)
                     }
                 }
         )
 
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .background(uiState.settings.emulationType.overlayColor())
+                .fillMaxWidth()
+                .height(previewHeight)
+                .align(Alignment.TopCenter)
+                .background(uiState.settings.emulationType.previewColor().copy(alpha = 0.08f))
         )
-        val blend = uiState.settings.emulationType.overlayBlendColor()
-        if (blend != Color.Transparent) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(blend)
-            )
-        }
 
         if (uiState.settings.isGridEnabled) {
-            GridOverlay(modifier = Modifier.fillMaxSize())
+            GridOverlay(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(previewHeight)
+                    .align(Alignment.TopCenter)
+            )
         }
 
         AnimatedVisibility(
@@ -191,7 +206,7 @@ fun CameraScreen(
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 80.dp)
+                .padding(top = 56.dp)
         ) {
             uiState.sceneInfo?.let { scene ->
                 SceneInfoCard(
@@ -288,7 +303,6 @@ fun CameraScreen(
         }
     }
 }
-
 @Composable
 private fun CameraTopBar(
     uiState: CameraUiState,
@@ -302,157 +316,147 @@ private fun CameraTopBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MoodBlack.copy(alpha = 0.5f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(GlassBg)
+            .border(0.5.dp, GlassBorder)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onFlashToggle, modifier = Modifier.size(40.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onFlashToggle, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = if (uiState.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
                     contentDescription = "Flash",
-                    tint = if (uiState.flashEnabled) MoodAccent else Color.White,
-                    modifier = Modifier.size(22.dp)
+                    tint = if (uiState.flashEnabled) MoodAccent else Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
                 )
             }
-
-            IconButton(onClick = onGridToggle, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = onGridToggle, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = Icons.Default.GridView,
                     contentDescription = "Grid",
-                    tint = if (uiState.settings.isGridEnabled) MoodAccent else Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.size(22.dp)
+                    tint = if (uiState.settings.isGridEnabled) MoodAccent else Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
                 )
             }
-
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MoodAccent.copy(alpha = 0.2f))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(GlassBg)
+                    .border(0.5.dp, GlassBorder, RoundedCornerShape(14.dp))
                     .clickable(onClick = onAspectRatioCycle)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = uiState.settings.aspectRatio.displayName,
-                    color = MoodAccent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = uiState.settings.aspectRatio.displayName, color = MoodAccent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
         }
-
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (uiState.settings.isAutoFilterEnabled) MoodAccent.copy(alpha = 0.3f)
-                        else Color.Transparent
-                    )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (uiState.settings.isAutoFilterEnabled) MoodAccent.copy(alpha = 0.25f) else Color.Transparent)
+                    .border(0.5.dp, if (uiState.settings.isAutoFilterEnabled) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(14.dp))
                     .clickable(onClick = onAutoFilterToggle)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = if (uiState.settings.isAutoFilterEnabled) MoodAccent else Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Auto",
-                        color = if (uiState.settings.isAutoFilterEnabled) MoodAccent else Color.White.copy(alpha = 0.6f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = if (uiState.settings.isAutoFilterEnabled) MoodAccent else Color.White.copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("AI", color = if (uiState.settings.isAutoFilterEnabled) MoodAccent else Color.White.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MoodAccent.copy(alpha = 0.2f))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MoodAccent.copy(alpha = 0.15f))
+                    .border(0.5.dp, MoodAccent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                     .clickable(onClick = onFilterToggle)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
-                Text(
-                    text = uiState.settings.emulationType.displayName,
-                    color = MoodAccent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = uiState.settings.emulationType.displayName, color = MoodAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
-
 @Composable
 private fun FilterBar(
     currentEmulation: EmulationType,
     onSelect: (EmulationType) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val categories = EmulationCategory.entries
+    var selectedCategory by remember { mutableStateOf(currentEmulation.category) }
+    val categoryFilters = EmulationType.entries.filter { it.category == selectedCategory }
+    val listState = rememberLazyListState()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MoodBlack.copy(alpha = 0.85f))
-            .padding(top = 12.dp, bottom = 80.dp)
+            .background(GlassBgHeavy)
+            .border(0.5.dp, GlassBorder, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+            .padding(bottom = 80.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Filters", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White, modifier = Modifier.size(18.dp))
+            Text("Filters", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
             }
         }
 
         LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            items(EmulationType.entries) { type ->
+            items(categories) { cat ->
+                val isActive = cat == selectedCategory
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isActive) MoodAccent.copy(alpha = 0.3f) else GlassBg)
+                        .border(0.5.dp, if (isActive) MoodAccent.copy(alpha = 0.6f) else GlassBorder, RoundedCornerShape(16.dp))
+                        .clickable { selectedCategory = cat }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(text = cat.label, color = if (isActive) MoodAccent else Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium)
+                }
+            }
+        }
+
+        LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(categoryFilters) { type ->
                 val isSelected = type == currentEmulation
                 Column(
                     modifier = Modifier
-                        .width(72.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            if (isSelected) MoodAccent.copy(alpha = 0.25f)
-                            else MoodSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        .clickable {
-                            onSelect(type)
-                            onDismiss()
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                        .width(68.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (isSelected) MoodAccent.copy(alpha = 0.2f) else GlassBg)
+                        .border(1.dp, if (isSelected) MoodAccent else Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
+                        .clickable { onSelect(type) }
+                        .padding(vertical = 8.dp, horizontal = 3.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(type.overlayColor())
-                            .border(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) MoodAccent else Color.White.copy(alpha = 0.3f),
-                                shape = CircleShape
-                            )
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Brush.radialGradient(listOf(type.previewColor(), type.previewColor().copy(alpha = 0.4f))))
+                            .border(if (isSelected) 1.5.dp else 0.5.dp, if (isSelected) MoodAccent else Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
                     Text(
                         text = type.displayName,
-                        color = if (isSelected) MoodAccent else Color.White,
-                        fontSize = 10.sp,
+                        color = if (isSelected) MoodAccent else Color.White.copy(alpha = 0.8f),
+                        fontSize = 9.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
@@ -463,7 +467,6 @@ private fun FilterBar(
         }
     }
 }
-
 @Composable
 private fun SettingsPanel(
     uiState: CameraUiState,
@@ -482,49 +485,35 @@ private fun SettingsPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MoodBlack.copy(alpha = 0.9f))
+            .background(GlassBgHeavy)
+            .border(0.5.dp, GlassBorder, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .padding(bottom = 100.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Adjustments", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White, modifier = Modifier.size(18.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Adjustments", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
             }
         }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
+        Spacer(modifier = Modifier.height(2.dp))
+        LazyRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             items(ToneType.entries.toList()) { tone ->
                 val isSelected = tone == uiState.settings.toneType
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (isSelected) MoodAccent.copy(alpha = 0.3f) else MoodSurfaceVariant.copy(alpha = 0.5f))
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isSelected) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+                        .border(0.5.dp, if (isSelected) MoodAccent.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(10.dp))
                         .clickable { onToneChange(tone) }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
-                    Text(
-                        text = tone.displayName,
-                        color = if (isSelected) MoodAccent else Color.White.copy(alpha = 0.8f),
-                        fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                    )
+                    Text(text = tone.displayName, color = if (isSelected) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
                 }
             }
         }
-
         Spacer(modifier = Modifier.height(8.dp))
-
         SettingsSlider("Contrast", uiState.settings.contrast, 0.5f..2f, onContrastChange)
         SettingsSlider("Brightness", uiState.settings.brightness, -0.5f..0.5f, onBrightnessChange)
         SettingsSlider("Temperature", uiState.settings.temperature, -1f..1f, onTemperatureChange)
@@ -532,74 +521,44 @@ private fun SettingsPanel(
         SettingsSlider("Fade", uiState.settings.fade, 0f..1f, onFadeChange)
         SettingsSlider("Vignette", uiState.settings.vignette, 0f..1f, onVignetteChange)
         SettingsSlider("Halation", uiState.settings.halationIntensity, 0f..1f, onHalationChange)
-
         Spacer(modifier = Modifier.height(4.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             ToggleChip("Grain", uiState.settings.isGrainEnabled, onGrainToggle, Modifier.weight(1f))
             ToggleChip("Halation", uiState.settings.isHalationEnabled, onHalationToggle, Modifier.weight(1f))
         }
-
         Spacer(modifier = Modifier.height(4.dp))
     }
 }
 
 @Composable
-private fun SettingsSlider(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit
-) {
+private fun SettingsSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onValueChange: (Float) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label, color = MoodOnSurfaceVariant, fontSize = 11.sp)
             Text(String.format("%.1f", value), color = MoodAccent, fontSize = 11.sp)
         }
         Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = range,
+            value = value, onValueChange = onValueChange, valueRange = range,
             modifier = Modifier.fillMaxWidth().height(20.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = MoodAccent,
-                activeTrackColor = MoodAccent,
-                inactiveTrackColor = MoodSurfaceVariant
-            )
+            colors = SliderDefaults.colors(thumbColor = MoodAccent, activeTrackColor = MoodAccent, inactiveTrackColor = MoodSurfaceVariant)
         )
     }
 }
 
 @Composable
-private fun ToggleChip(
-    label: String,
-    enabled: Boolean,
-    onToggle: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun ToggleChip(label: String, enabled: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(if (enabled) MoodAccent.copy(alpha = 0.25f) else MoodSurfaceVariant.copy(alpha = 0.5f))
+            .background(if (enabled) MoodAccent.copy(alpha = 0.25f) else GlassBg)
+            .border(0.5.dp, if (enabled) MoodAccent.copy(alpha = 0.4f) else GlassBorder, RoundedCornerShape(8.dp))
             .clickable(onClick = onToggle)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            color = if (enabled) MoodAccent else Color.White.copy(alpha = 0.8f),
-            fontSize = 11.sp,
-            fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal
-        )
+        Text(text = label, color = if (enabled) MoodAccent else Color.White.copy(alpha = 0.8f), fontSize = 11.sp, fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal)
     }
 }
-
 @Composable
 private fun SceneInfoCard(
     sceneInfo: com.moodcamera.domain.model.SceneInfo,
@@ -610,49 +569,23 @@ private fun SceneInfoCard(
     Box(
         modifier = modifier
             .padding(horizontal = 48.dp)
-            .background(MoodSurface.copy(alpha = 0.95f), RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(GlassBgHeavy)
+            .border(0.5.dp, GlassBorder, RoundedCornerShape(16.dp))
             .padding(16.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = MoodAccent,
-                modifier = Modifier.size(24.dp)
-            )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MoodAccent, modifier = Modifier.size(24.dp))
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Recommended: ${sceneInfo.recommendedEmulation.displayName}",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Recommended: ", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             if (sceneInfo.detectedLabels.isNotEmpty()) {
-                Text(
-                    text = sceneInfo.detectedLabels.take(3).joinToString(", ") { it.text },
-                    color = MoodOnSurfaceVariant,
-                    fontSize = 12.sp
-                )
+                Text(text = sceneInfo.detectedLabels.take(3).joinToString(", ") { it.text }, color = MoodOnSurfaceVariant, fontSize = 12.sp)
             }
             Spacer(modifier = Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = "Dismiss",
-                    color = MoodOnSurfaceVariant,
-                    fontSize = 14.sp,
-                    modifier = Modifier
-                        .clickable(onClick = onDismiss)
-                        .padding(8.dp)
-                )
+                Text("Dismiss", color = MoodOnSurfaceVariant, fontSize = 14.sp, modifier = Modifier.clickable(onClick = onDismiss).padding(8.dp))
                 Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MoodAccent)
-                        .clickable(onClick = onApply)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(MoodAccent).clickable(onClick = onApply).padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Text(text = "Apply", color = MoodBlack, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
@@ -674,8 +607,9 @@ private fun CameraBottomBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MoodBlack.copy(alpha = 0.55f))
-            .padding(bottom = 20.dp),
+            .background(GlassBg)
+            .border(0.5.dp, GlassBorder)
+            .padding(bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(
@@ -684,27 +618,22 @@ private fun CameraBottomBar(
                 .padding(horizontal = 32.dp)
                 .pointerInput(Unit) {
                     detectVerticalDragGestures { _, dragAmount ->
-                        val newExposure = (uiState.settings.exposureCompensation - dragAmount * 0.1f)
-                            .coerceIn(-3f, 3f)
+                        val newExposure = (uiState.settings.exposureCompensation - dragAmount * 0.1f).coerceIn(-3f, 3f)
                         onExposureChange(newExposure)
                     }
                 },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "-3", color = MoodOnSurfaceVariant, fontSize = 10.sp)
+            Text(text = "-3", color = MoodOnSurfaceVariant, fontSize = 9.sp)
             LinearProgressIndicator(
                 progress = { ((uiState.settings.exposureCompensation + 3f) / 6f) },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(3.dp)
-                    .padding(horizontal = 8.dp),
-                color = MoodAccent,
-                trackColor = MoodSurfaceVariant
+                modifier = Modifier.weight(1f).height(2.dp).padding(horizontal = 8.dp),
+                color = MoodAccent, trackColor = MoodSurfaceVariant
             )
-            Text(text = "+3", color = MoodOnSurfaceVariant, fontSize = 10.sp)
+            Text(text = "+3", color = MoodOnSurfaceVariant, fontSize = 9.sp)
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -712,50 +641,46 @@ private fun CameraBottomBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onGalleryClick, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    imageVector = Icons.Default.PhotoLibrary,
-                    contentDescription = "Gallery",
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp)
-                )
+                Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(22.dp))
             }
 
+            // Premium capture button
             Box(
                 modifier = Modifier
-                    .size(68.dp)
+                    .size(72.dp)
                     .clip(CircleShape)
-                    .border(3.dp, Color.White, CircleShape)
-                    .background(if (uiState.isCapturing) MoodAccent else Color.White.copy(alpha = 0.15f))
+                    .border(2.5.dp, Color.White, CircleShape)
+                    .background(Color.Transparent)
                     .clickable(enabled = !uiState.isCapturing) { onCapture() },
                 contentAlignment = Alignment.Center
             ) {
                 if (uiState.isCapturing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(30.dp),
-                        color = MoodBlack,
-                        strokeWidth = 3.dp
-                    )
+                    CircularProgressIndicator(modifier = Modifier.size(30.dp), color = MoodAccent, strokeWidth = 2.5.dp)
                 } else {
                     Box(
                         modifier = Modifier
-                            .size(54.dp)
+                            .size(58.dp)
                             .clip(CircleShape)
                             .background(Color.White)
+                            .drawBehind {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(Color.White, Color(0xFFCCCCCC)),
+                                        center = Offset(size.width * 0.4f, size.height * 0.35f),
+                                        radius = size.width * 0.5f
+                                    )
+                                )
+                            }
                     )
                 }
             }
 
             IconButton(onClick = onSettingsClick, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "Adjust",
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp)
-                )
+                Icon(Icons.Default.Tune, contentDescription = "Adjust", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(22.dp))
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -763,18 +688,13 @@ private fun CameraBottomBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onSwitchCamera, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    imageVector = Icons.Default.SwapHoriz,
-                    contentDescription = "Switch Camera",
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Camera", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "${uiState.settings.emulationType.displayName}  |  ${uiState.settings.toneType.displayName}",
-                color = MoodAccent,
-                fontSize = 12.sp,
+                text = "  |  ",
+                color = MoodAccent.copy(alpha = 0.8f),
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
             )
         }
@@ -785,22 +705,10 @@ private fun CameraBottomBar(
 private fun GridOverlay(modifier: Modifier = Modifier) {
     Box(modifier = modifier) {
         for (i in 1..2) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = (i * 33.33).dp)
-                    .width(1.dp)
-                    .background(Color.White.copy(alpha = 0.3f))
-            )
+            Box(modifier = Modifier.fillMaxSize().padding(start = (i * 33.33).dp).width(0.5.dp).background(Color.White.copy(alpha = 0.25f)))
         }
         for (i in 1..2) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = (i * 33.33).dp)
-                    .height(1.dp)
-                    .background(Color.White.copy(alpha = 0.3f))
-            )
+            Box(modifier = Modifier.fillMaxSize().padding(top = (i * 33.33).dp).height(0.5.dp).background(Color.White.copy(alpha = 0.25f)))
         }
     }
 }
@@ -808,19 +716,13 @@ private fun GridOverlay(modifier: Modifier = Modifier) {
 @Composable
 private fun ProcessingOverlay(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MoodBlack.copy(alpha = 0.7f)),
+        modifier = modifier.fillMaxSize().background(MoodBlack.copy(alpha = 0.75f)),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(48.dp),
-                color = MoodAccent,
-                strokeWidth = 3.dp
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(text = "Processing...", color = MoodAccent, fontSize = 16.sp)
+            CircularProgressIndicator(modifier = Modifier.size(44.dp), color = MoodAccent, strokeWidth = 2.5.dp)
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(text = "Processing...", color = MoodAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -829,9 +731,11 @@ private fun ProcessingOverlay(modifier: Modifier = Modifier) {
 private fun ErrorToast(message: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .background(MoodSurface, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(GlassBgHeavy)
+            .border(0.5.dp, GlassBorder, RoundedCornerShape(12.dp))
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(text = message, color = Color(0xFFCF6679), fontSize = 14.sp)
+        Text(text = message, color = Color(0xFFCF6679), fontSize = 13.sp)
     }
 }
