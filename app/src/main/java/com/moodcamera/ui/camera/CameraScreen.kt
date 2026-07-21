@@ -2,6 +2,8 @@
 
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -151,20 +153,36 @@ fun CameraScreen(
     }
 
     var livePreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var cachedSourceBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
         viewModel.startCamera(lifecycleOwner, previewView)
     }
 
-    LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {
-        val previewBitmap = previewView.bitmap
-        if (previewBitmap != null && previewBitmap.width > 0 && previewBitmap.height > 0) {
+    LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
+        kotlinx.coroutines.delay(500)
+        while (true) {
             try {
-                val scaled = Bitmap.createScaledBitmap(previewBitmap, 480, 640, true)
-                val processed = PreviewProcessor.processPreview(scaled, uiState.settings)
-                livePreviewBitmap = processed
+                val bmp = previewView.bitmap
+                if (bmp != null && bmp.width > 0 && bmp.height > 0) {
+                    val src = Bitmap.createScaledBitmap(bmp, 480, 640, true)
+                    cachedSourceBitmap = src
+                    val processed = withContext(Dispatchers.Default) {
+                        PreviewProcessor.processPreview(src, uiState.settings)
+                    }
+                    livePreviewBitmap = processed
+                }
             } catch (_: Exception) {}
+            kotlinx.coroutines.delay(100)
         }
+    }
+
+    LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {
+        val src = cachedSourceBitmap ?: return@LaunchedEffect
+        val processed = withContext(Dispatchers.Default) {
+            PreviewProcessor.processPreview(src, uiState.settings)
+        }
+        livePreviewBitmap = processed
     }
 
     var pinchZoom by remember { mutableFloatStateOf(uiState.currentZoom) }
