@@ -198,13 +198,17 @@ class CameraViewModel @Inject constructor(
                             processedBitmap.recycle()
                             processedBitmap = aiResult
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        val aiErr = AiEnhancer.getLastError() ?: e.message ?: "unknown"
+                        android.util.Log.e("MoodSnap", "AI enhance failed: $aiErr", e)
                         if (settings.isHdEnabled) {
-                            val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                            if (hdResult !== processedBitmap) {
-                                processedBitmap.recycle()
-                                processedBitmap = hdResult
-                            }
+                            try {
+                                val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                                if (hdResult !== processedBitmap) {
+                                    processedBitmap.recycle()
+                                    processedBitmap = hdResult
+                                }
+                            } catch (_: Exception) {}
                         }
                     }
                 } else if (settings.isHdEnabled) {

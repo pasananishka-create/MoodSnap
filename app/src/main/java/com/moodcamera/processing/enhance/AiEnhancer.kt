@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.util.Log
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -18,72 +19,109 @@ import kotlin.math.sqrt
 
 object AiEnhancer {
 
+    private const val TAG = "AiEnhancer"
     private const val MODEL_INPUT_SIZE = 50
     private const val SCALE_FACTOR = 4
     private const val MODEL_OUTPUT_SIZE = MODEL_INPUT_SIZE * SCALE_FACTOR
 
     private var interpreter: Interpreter? = null
     private var isInitialized = false
-    private var outputIsNormalized = false
+    private var lastError: String? = null
+    private var inputShape: IntArray = intArrayOf()
+    private var outputShape: IntArray = intArrayOf()
+    private var inputIsFloat = true
+    private var outputIsFloat = true
+    private var outputRange01 = false
 
     fun init(context: Context) {
         if (isInitialized) return
         try {
             val model = loadModelFile(context)
             val options = Interpreter.Options().apply {
-                setNumThreads(4)
-                setUseNNAPI(true)
+                setNumThreads(2)
             }
             interpreter = Interpreter(model, options)
 
-            val inputShape = interpreter!!.getInputTensor(0).shape()
-            val outputShape = interpreter!!.getOutputTensor(0).shape()
+            val interp = interpreter!!
 
-            if (inputShape.size == 4 && inputShape[1] == MODEL_INPUT_SIZE && inputShape[2] == MODEL_INPUT_SIZE) {
+            inputShape = interp.getInputTensor(0).shape()
+            outputShape = interp.getOutputTensor(0).shape()
+            val inputDtype = interp.getInputTensor(0).dataType()
+            val outputDtype = interp.getOutputTensor(0).dataType()
+
+            inputIsFloat = inputDtype.name.contains("FLOAT")
+            outputIsFloat = outputDtype.name.contains("FLOAT")
+
+            Log.d(TAG, "Model loaded: input=$inputShape dtype=$inputDtype output=$outputShape dtype=$outputDtype")
+
+            if (inputShape.size == 4) {
                 isInitialized = true
-                outputIsNormalized = false
-                probeModelRange()
+                probeModel()
+                Log.d(TAG, "AI Enhancer ready. outputRange01=$outputRange01")
             } else {
-                isInitialized = true
-                outputIsNormalized = false
+                lastError = "Unexpected input shape: ${inputShape.contentToString()}"
+                Log.e(TAG, lastError!!)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            lastError = "Init failed: ${e.message}"
+            Log.e(TAG, lastError!!, e)
             isInitialized = false
         }
     }
 
-    private fun probeModelRange() {
+    private fun probeModel() {
         val interp = interpreter ?: return
         try {
-            val testInput = ByteBuffer.allocateDirect(1 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * 3 * 4)
-            testInput.order(ByteOrder.nativeOrder())
-            for (i in 0 until MODEL_INPUT_SIZE * MODEL_INPUT_SIZE) {
-                testInput.putFloat(128f)
-                testInput.putFloat(128f)
-                testInput.putFloat(128f)
-            }
-            val testOutput = ByteBuffer.allocateDirect(1 * MODEL_OUTPUT_SIZE * MODEL_OUTPUT_SIZE * 3 * 4)
-            testOutput.order(ByteOrder.nativeOrder())
-            interp.run(testInput, testOutput)
-            testOutput.rewind()
-            val sampleVal = testOutput.float
-            outputIsNormalized = sampleVal < 2f
-        } catch (_: Exception) {
-            outputIsNormalized = false
+            val inSize = inputShape[1] * inputShape[2] * inputShape[3]
+            val outSize = outputShape[1] * outputShape[2] * outputShape[3]
+
+            val inputBuf = ByteBuffer.allocateDirect(inSize * 4)
+            inputBuf.order(ByteOrder.nativeOrder())
+            for (i in 0 until inSize) inputBuf.putFloat(128f)
+            inputBuf.rewind()
+
+            val outputBuf = ByteBuffer.allocateDirect(outSize * 4)
+            outputBuf.order(ByteOrder.nativeOrder())
+
+            interp.run(inputBuf, outputBuf)
+            outputBuf.rewind()
+
+            val sample = outputBuf.float
+            outputRange01 = sample in -2f..2f
+            Log.d(TAG, "Probe result: first output float=$sample, normalized=$outputRange01")
+        } catch (e: Exception) {
+            Log.w(TAG, "Probe failed: ${e.message}")
+            outputRange01 = false
         }
     }
 
     fun isReady(): Boolean = isInitialized && interpreter != null
+    fun getLastError(): String? = lastError
 
     fun enhance(bitmap: Bitmap, intensity: Float = 1f): Bitmap {
-        if (!isReady()) return bitmap
+        if (!isReady()) {
+            Log.w(TAG, "Not ready, returning original")
+            return bitmap
+        }
         val w = bitmap.width
         val h = bitmap.height
-        if (w < MODEL_INPUT_SIZE || h < MODEL_INPUT_SIZE) return bitmap
+        if (w < MODEL_INPUT_SIZE || h < MODEL_INPUT_SIZE) {
+            Log.w(TAG, "Image too small: ${w}x${h}")
+            return bitmap
+        }
 
-        val inputW = min(w, MODEL_INPUT_SIZE * 6)
-        val inputH = min(h, MODEL_INPUT_SIZE * 6)
+        val interp = interpreter ?: return bitmap
+
+        val modelInH = inputShape[1]
+        val modelInW = inputShape[2]
+        val modelOutH = outputShape[1]
+        val modelOutW = outputShape[2]
+        val scaleH = modelOutH / modelInH
+        val scaleW = modelOutW / modelInW
+        val actualScale = min(scaleH, scaleW)
+
+        val inputW = min(w, modelInW * 4)
+        val inputH = min(h, modelInH * 4)
 
         val scaled = if (w != inputW || h != inputH) {
             Bitmap.createScaledBitmap(bitmap, inputW, inputH, true)
@@ -91,51 +129,58 @@ object AiEnhancer {
             bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
 
-        val outputW = inputW * SCALE_FACTOR
-        val outputH = inputH * SCALE_FACTOR
+        val outputW = inputW * actualScale
+        val outputH = inputH * actualScale
         val outputPixels = IntArray(outputW * outputH)
         val weightMap = FloatArray(outputW * outputH)
 
         val inputPixels = IntArray(inputW * inputH)
         scaled.getPixels(inputPixels, 0, inputW, 0, 0, inputW, inputH)
 
-        val step = MODEL_INPUT_SIZE / 2
-        val tilesX = max(1, (inputW - MODEL_INPUT_SIZE + step) / step)
-        val tilesY = max(1, (inputH - MODEL_INPUT_SIZE + step) / step)
+        val step = modelInW / 2
+        val tilesX = max(1, (inputW - modelInW + step) / step)
+        val tilesY = max(1, (inputH - modelInH + step) / step)
+
+        var tilesProcessed = 0
+        var tilesFailed = 0
 
         for (ty in 0 until tilesY) {
             for (tx in 0 until tilesX) {
-                val srcX = min(tx * step, inputW - MODEL_INPUT_SIZE)
-                val srcY = min(ty * step, inputH - MODEL_INPUT_SIZE)
+                val srcX = min(tx * step, inputW - modelInW)
+                val srcY = min(ty * step, inputH - modelInH)
 
-                val tilePixels = IntArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE)
-                for (y in 0 until MODEL_INPUT_SIZE) {
-                    for (x in 0 until MODEL_INPUT_SIZE) {
+                val tilePixels = IntArray(modelInW * modelInH)
+                for (y in 0 until modelInH) {
+                    for (x in 0 until modelInW) {
                         val sx = (srcX + x).coerceIn(0, inputW - 1)
                         val sy = (srcY + y).coerceIn(0, inputH - 1)
-                        tilePixels[y * MODEL_INPUT_SIZE + x] = inputPixels[sy * inputW + sx]
+                        tilePixels[y * modelInW + x] = inputPixels[sy * inputW + sx]
                     }
                 }
 
-                val srPixels = runModel(tilePixels) ?: continue
+                val srPixels = runModel(interp, tilePixels, modelInW, modelInH, modelOutW, modelOutH)
+                if (srPixels == null) {
+                    tilesFailed++
+                    continue
+                }
+                tilesProcessed++
 
-                val dstX = srcX * SCALE_FACTOR
-                val dstY = srcY * SCALE_FACTOR
+                val dstX = srcX * actualScale
+                val dstY = srcY * actualScale
 
-                for (y in 0 until MODEL_OUTPUT_SIZE) {
-                    for (x in 0 until MODEL_OUTPUT_SIZE) {
+                for (y in 0 until modelOutH) {
+                    for (x in 0 until modelOutW) {
                         val ox = dstX + x
                         val oy = dstY + y
                         if (ox >= outputW || oy >= outputH) continue
 
-                        val nx = (x.toFloat() / MODEL_OUTPUT_SIZE - 0.5f) * 2f
-                        val ny = (y.toFloat() / MODEL_OUTPUT_SIZE - 0.5f) * 2f
+                        val nx = (x.toFloat() / modelOutW - 0.5f) * 2f
+                        val ny = (y.toFloat() / modelOutH - 0.5f) * 2f
                         val dist = min(1f, sqrt(nx * nx + ny * ny))
-                        val weight = (1f - dist * 0.5f).coerceIn(0.5f, 1f)
+                        val weight = (1f - dist * 0.3f).coerceIn(0.7f, 1f)
 
                         val outIdx = oy * outputW + ox
-                        val srIdx = y * MODEL_OUTPUT_SIZE + x
-                        val srPixel = srPixels[srIdx]
+                        val srIdx = y * modelOutW + x
 
                         val curWeight = weightMap[outIdx]
                         val totalWeight = curWeight + weight
@@ -144,9 +189,9 @@ object AiEnhancer {
                             val oldR = Color.red(outputPixels[outIdx])
                             val oldG = Color.green(outputPixels[outIdx])
                             val oldB = Color.blue(outputPixels[outIdx])
-                            val newR = Color.red(srPixel)
-                            val newG = Color.green(srPixel)
-                            val newB = Color.blue(srPixel)
+                            val newR = Color.red(srPixels[srIdx])
+                            val newG = Color.green(srPixels[srIdx])
+                            val newB = Color.blue(srPixels[srIdx])
                             val ratio = weight / totalWeight
                             outputPixels[outIdx] = Color.rgb(
                                 (oldR + (newR - oldR) * ratio).roundToInt().coerceIn(0, 255),
@@ -160,6 +205,14 @@ object AiEnhancer {
             }
         }
 
+        Log.d(TAG, "Tiles: $tilesProcessed ok, $tilesFailed failed")
+
+        if (tilesProcessed == 0) {
+            lastError = "All tiles failed"
+            if (scaled !== bitmap) scaled.recycle()
+            return bitmap
+        }
+
         val output = Bitmap.createBitmap(outputW, outputH, Bitmap.Config.ARGB_8888)
         output.setPixels(outputPixels, 0, outputW, 0, 0, outputW, outputH)
 
@@ -170,7 +223,6 @@ object AiEnhancer {
         }
 
         result = preserveColors(bitmap, result)
-
         result = enhanceDetail(result, intensity)
 
         if (scaled !== bitmap) scaled.recycle()
@@ -180,36 +232,94 @@ object AiEnhancer {
         return blendWithOriginal(bitmap, result, intensity)
     }
 
-    private fun runModel(tilePixels: IntArray): IntArray? {
-        val interp = interpreter ?: return null
-
+    private fun runModel(interp: Interpreter, tilePixels: IntArray, inW: Int, inH: Int, outW: Int, outH: Int): IntArray? {
         return try {
-            val inputBuffer = ByteBuffer.allocateDirect(1 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * 3 * 4)
-            inputBuffer.order(ByteOrder.nativeOrder())
+            val pixelCount = inW * inH
+            val outPixelCount = outW * outH
 
-            for (pixel in tilePixels) {
-                inputBuffer.putFloat(Color.red(pixel).toFloat())
-                inputBuffer.putFloat(Color.green(pixel).toFloat())
-                inputBuffer.putFloat(Color.blue(pixel).toFloat())
+            if (inputIsFloat) {
+                val inputBuf = ByteBuffer.allocateDirect(pixelCount * 3 * 4)
+                inputBuf.order(ByteOrder.nativeOrder())
+                for (pixel in tilePixels) {
+                    inputBuf.putFloat(Color.red(pixel).toFloat())
+                    inputBuf.putFloat(Color.green(pixel).toFloat())
+                    inputBuf.putFloat(Color.blue(pixel).toFloat())
+                }
+                inputBuf.rewind()
+
+                if (outputIsFloat) {
+                    val outputBuf = ByteBuffer.allocateDirect(outPixelCount * 3 * 4)
+                    outputBuf.order(ByteOrder.nativeOrder())
+                    interp.run(inputBuf, outputBuf)
+                    outputBuf.rewind()
+
+                    val srPixels = IntArray(outPixelCount)
+                    val scale = if (outputRange01) 255f else 1f
+                    for (i in srPixels.indices) {
+                        val r = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        val g = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        val b = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        srPixels[i] = Color.rgb(r, g, b)
+                    }
+                    srPixels
+                } else {
+                    val outputBuf = ByteBuffer.allocateDirect(outPixelCount * 3)
+                    outputBuf.order(ByteOrder.nativeOrder())
+                    interp.run(inputBuf, outputBuf)
+                    outputBuf.rewind()
+
+                    val srPixels = IntArray(outPixelCount)
+                    for (i in srPixels.indices) {
+                        val r = outputBuf.get().toInt() and 0xFF
+                        val g = outputBuf.get().toInt() and 0xFF
+                        val b = outputBuf.get().toInt() and 0xFF
+                        srPixels[i] = Color.rgb(r, g, b)
+                    }
+                    srPixels
+                }
+            } else {
+                val inputBuf = ByteBuffer.allocateDirect(pixelCount * 3)
+                inputBuf.order(ByteOrder.nativeOrder())
+                for (pixel in tilePixels) {
+                    inputBuf.put(Color.red(pixel).toByte())
+                    inputBuf.put(Color.green(pixel).toByte())
+                    inputBuf.put(Color.blue(pixel).toByte())
+                }
+                inputBuf.rewind()
+
+                if (outputIsFloat) {
+                    val outputBuf = ByteBuffer.allocateDirect(outPixelCount * 3 * 4)
+                    outputBuf.order(ByteOrder.nativeOrder())
+                    interp.run(inputBuf, outputBuf)
+                    outputBuf.rewind()
+
+                    val srPixels = IntArray(outPixelCount)
+                    val scale = if (outputRange01) 255f else 1f
+                    for (i in srPixels.indices) {
+                        val r = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        val g = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        val b = (outputBuf.float * scale).coerceIn(0f, 255f).roundToInt()
+                        srPixels[i] = Color.rgb(r, g, b)
+                    }
+                    srPixels
+                } else {
+                    val outputBuf = ByteBuffer.allocateDirect(outPixelCount * 3)
+                    outputBuf.order(ByteOrder.nativeOrder())
+                    interp.run(inputBuf, outputBuf)
+                    outputBuf.rewind()
+
+                    val srPixels = IntArray(outPixelCount)
+                    for (i in srPixels.indices) {
+                        val r = outputBuf.get().toInt() and 0xFF
+                        val g = outputBuf.get().toInt() and 0xFF
+                        val b = outputBuf.get().toInt() and 0xFF
+                        srPixels[i] = Color.rgb(r, g, b)
+                    }
+                    srPixels
+                }
             }
-            inputBuffer.rewind()
-
-            val outputBuffer = ByteBuffer.allocateDirect(1 * MODEL_OUTPUT_SIZE * MODEL_OUTPUT_SIZE * 3 * 4)
-            outputBuffer.order(ByteOrder.nativeOrder())
-
-            interp.run(inputBuffer, outputBuffer)
-            outputBuffer.rewind()
-
-            val srPixels = IntArray(MODEL_OUTPUT_SIZE * MODEL_OUTPUT_SIZE)
-            val scale = if (outputIsNormalized) 255f else 1f
-            for (i in srPixels.indices) {
-                val r = (outputBuffer.float * scale).coerceIn(0f, 255f).roundToInt()
-                val g = (outputBuffer.float * scale).coerceIn(0f, 255f).roundToInt()
-                val b = (outputBuffer.float * scale).coerceIn(0f, 255f).roundToInt()
-                srPixels[i] = Color.rgb(r, g, b)
-            }
-            srPixels
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Tile inference failed: ${e.message}")
             null
         }
     }
@@ -242,9 +352,9 @@ object AiEnhancer {
         val enhAvgG = enhSumG.toFloat() / count
         val enhAvgB = enhSumB.toFloat() / count
 
-        val gainR = if (enhAvgR > 0f) origAvgR / enhAvgR else 1f
-        val gainG = if (enhAvgG > 0f) origAvgG / enhAvgG else 1f
-        val gainB = if (enhAvgB > 0f) origAvgB / enhAvgB else 1f
+        val gainR = if (enhAvgR > 1f) origAvgR / enhAvgR else 1f
+        val gainG = if (enhAvgG > 1f) origAvgG / enhAvgG else 1f
+        val gainB = if (enhAvgB > 1f) origAvgB / enhAvgB else 1f
 
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val outPixels = IntArray(w * h)
@@ -265,16 +375,13 @@ object AiEnhancer {
         bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
 
         val blurred = boxBlur(pixels, w, h, 2)
-
         val outPixels = IntArray(pixels.size)
         val sharpAmt = 0.8f * intensity
         val contrastAmt = 0.15f * intensity
 
         var minL = 255f; var maxL = 0f
-        val luminance = FloatArray(pixels.size)
         for (i in pixels.indices) {
             val l = Color.red(pixels[i]) * 0.299f + Color.green(pixels[i]) * 0.587f + Color.blue(pixels[i]) * 0.114f
-            luminance[i] = l
             if (l < minL) minL = l
             if (l > maxL) maxL = l
         }
@@ -289,19 +396,13 @@ object AiEnhancer {
             val bg = Color.green(blurred[i]).toFloat()
             val bb = Color.blue(blurred[i]).toFloat()
 
-            val detailR = (r - br) * sharpAmt
-            val detailG = (g - bg) * sharpAmt
-            val detailB = (b - bb) * sharpAmt
+            var nr = r + (r - br) * sharpAmt
+            var ng = g + (g - bg) * sharpAmt
+            var nb = b + (b - bb) * sharpAmt
 
-            var nr = r + detailR
-            var ng = g + detailG
-            var nb = b + detailB
-
-            val l = nr * 0.299f + ng * 0.587f + nb * 0.114f
-            val midPoint = 128f
-            nr = midPoint + (nr - midPoint) * contrastGain
-            ng = midPoint + (ng - midPoint) * contrastGain
-            nb = midPoint + (nb - midPoint) * contrastGain
+            nr = 128f + (nr - 128f) * contrastGain
+            ng = 128f + (ng - 128f) * contrastGain
+            nb = 128f + (nb - 128f) * contrastGain
 
             outPixels[i] = Color.rgb(
                 nr.roundToInt().coerceIn(0, 255),
@@ -328,8 +429,7 @@ object AiEnhancer {
                 sumR += Color.red(px); sumG += Color.green(px); sumB += Color.blue(px); count++
             }
             for (x in 0 until w) {
-                val idx = y * w + x
-                temp[idx] = Color.argb(255, sumR / count, sumG / count, sumB / count)
+                temp[y * w + x] = Color.argb(255, sumR / count, sumG / count, sumB / count)
                 if (x + r + 1 < w) {
                     val add = pixels[y * w + x + r + 1]
                     val rem = pixels[y * w + (x - r).coerceIn(0, w - 1)]
