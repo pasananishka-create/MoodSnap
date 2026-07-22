@@ -28,7 +28,13 @@ enum class CinematicLut(
     COLD_STEEL("Cold Steel", "Cool desaturated steel"),
     FILM_NOIR("Film Noir", "Classic B&W cinema"),
     MATTE_FADE("Matte Fade", "Indie film matte look"),
-    FRENCH_COMEDY("French Cinema", "Warm European cinema")
+    FRENCH_COMEDY("French Cinema", "Warm European cinema"),
+    WESTERN_SUNSET("Western Sunset", "Warm orange golden hour"),
+    SCANDINAVIAN("Scandinavian Cold", "Nordic noir cold blue"),
+    HONG_KONG_NEO("Hong Kong Neon", "Neon urban night cyberpunk"),
+    INDIE_MAUVE("Indie Mauve", "A24-style muted mauve pink"),
+    VINTAGE_KODAK_MOVIE("Vintage Kodak Movie", "Warm Kodak cinema stock"),
+    COLD_CHROME("Cold Chrome", "Blue steel high contrast")
 }
 
 object CinematicLutEngine {
@@ -55,6 +61,12 @@ object CinematicLutEngine {
             CinematicLut.FILM_NOIR -> filmNoir(r, g, b)
             CinematicLut.MATTE_FADE -> matteFade(r, g, b)
             CinematicLut.FRENCH_COMEDY -> frenchCinema(r, g, b)
+            CinematicLut.WESTERN_SUNSET -> westernSunset(r, g, b)
+            CinematicLut.SCANDINAVIAN -> scandinavian(r, g, b)
+            CinematicLut.HONG_KONG_NEO -> hongKongNeo(r, g, b)
+            CinematicLut.INDIE_MAUVE -> indieMauve(r, g, b)
+            CinematicLut.VINTAGE_KODAK_MOVIE -> vintageKodakMovie(r, g, b)
+            CinematicLut.COLD_CHROME -> coldChrome(r, g, b)
         }
     }
 
@@ -258,6 +270,75 @@ object CinematicLutEngine {
         val nb = clamp(b * 0.88f)
         val l = lum(nr, ng, nb)
         return Triple(sCurve(clamp(nr + l * 0.02f), 0.3f), sCurve(clamp(ng + l * 0.01f), 0.28f), sCurve(clamp(nb + l * 0.03f), 0.3f))
+    }
+
+    // ── Western Sunset: Orange golden hour warmth ────────────────────
+    private fun westernSunset(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 1.25f + 0.12f)
+        val ng = clamp(g * 1.05f + 0.04f)
+        val nb = clamp(b * 0.65f - 0.05f)
+        val nr2 = sCurve(nr, 0.45f)
+        val ng2 = sCurve(ng, 0.35f)
+        val nb2 = sCurve(nb, 0.4f)
+        val l = lum(nr2, ng2, nb2)
+        return Triple(clamp(nr2 * 0.95f + l * 0.05f), clamp(ng2 * 0.97f + l * 0.03f), clamp(nb2 + 0.03f))
+    }
+
+    // ── Scandinavian Cold: Nordic noir, cold blue desaturated ────────
+    private fun scandinavian(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 0.78f)
+        val ng = clamp(g * 0.88f + 0.02f)
+        val nb = clamp(b * 1.22f + 0.1f)
+        val l = lum(nr, ng, nb)
+        val desat = lerp(nr, l, 0.3f)
+        val desatG = lerp(ng, l, 0.25f)
+        return Triple(sCurve(desat, 0.35f), sCurve(desatG, 0.3f), sCurve(nb, 0.42f))
+    }
+
+    // ── Hong Kong Neon: Neon-saturated urban cyberpunk ────────────────
+    private fun hongKongNeo(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 1.3f + 0.1f)
+        val ng = clamp(g * 0.7f + 0.02f)
+        val nb = clamp(b * 1.25f + 0.12f)
+        val nr2 = sCurve(nr, 0.55f)
+        val ng2 = sCurve(ng, 0.4f)
+        val nb2 = sCurve(nb, 0.5f)
+        return Triple(clamp(nr2 + 0.03f), clamp(ng2), clamp(nb2 + 0.05f))
+    }
+
+    // ── Indie Mauve: A24-style muted mauve/pink ─────────────────────
+    private fun indieMauve(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 1.1f + 0.08f)
+        val ng = clamp(g * 0.82f + 0.02f)
+        val nb = clamp(b * 0.95f + 0.06f)
+        val lift = 0.1f
+        val nr2 = clamp(sCurve(clamp(nr + lift), 0.25f))
+        val ng2 = clamp(sCurve(clamp(ng + lift), 0.2f))
+        val nb2 = clamp(sCurve(clamp(nb + lift), 0.22f))
+        return Triple(clamp(nr2 + 0.02f), ng2, clamp(nb2 + 0.03f))
+    }
+
+    // ── Vintage Kodak Movie: Warm cinema stock amber ─────────────────
+    private fun vintageKodakMovie(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 1.15f + 0.08f)
+        val ng = clamp(g * 1.02f + 0.03f)
+        val nb = clamp(b * 0.78f - 0.02f)
+        val nr2 = sCurve(nr, 0.4f)
+        val ng2 = sCurve(ng, 0.32f)
+        val nb2 = sCurve(nb, 0.35f)
+        val l = lum(nr2, ng2, nb2)
+        return Triple(clamp(nr2 * 0.96f + l * 0.04f), clamp(ng2 * 0.98f + l * 0.02f + 0.01f), clamp(nb2 + l * 0.03f))
+    }
+
+    // ── Cold Chrome: Blue steel, high contrast metallic ──────────────
+    private fun coldChrome(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+        val nr = clamp(r * 0.85f)
+        val ng = clamp(g * 0.92f + 0.03f)
+        val nb = clamp(b * 1.2f + 0.1f)
+        val nr2 = sCurve(clamp((nr - 0.5f) * 1.5f + 0.5f), 0.55f)
+        val ng2 = sCurve(clamp((ng - 0.5f) * 1.4f + 0.5f), 0.5f)
+        val nb2 = sCurve(clamp((nb - 0.5f) * 1.3f + 0.5f), 0.48f)
+        return Triple(clamp(nr2 * 0.9f + 0.02f), clamp(ng2 * 0.95f + 0.01f), clamp(nb2))
     }
 
     private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t

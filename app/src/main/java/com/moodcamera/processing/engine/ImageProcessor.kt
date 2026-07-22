@@ -156,6 +156,14 @@ object ImageProcessor {
                 EmulationType.NIGHTFADE -> nightfade(r, g, b)
                 EmulationType.ROSEWOOD -> rosewood(r, g, b)
                 EmulationType.AGFA_VISTA -> agfaVista(r, g, b)
+                EmulationType.BLEACH_BYPASS -> bleachBypassEmu(r, g, b)
+                EmulationType.TECHNICOLOR -> technicolor(r, g, b)
+                EmulationType.NOIR -> filmNoirEmu(r, g, b)
+                EmulationType.NEON_NOIR -> neonNoir(r, g, b)
+                EmulationType.VINTAGE_CHROME -> vintageChromeEmu(r, g, b)
+                EmulationType.ANALOG_WARM -> analogWarm(r, g, b)
+                EmulationType.DAY_FOR_NIGHT -> dayForNight(r, g, b)
+                EmulationType.SILVER_RETENTION -> silverRetention(r, g, b)
                 // Natural
                 EmulationType.VELVIA -> velvia(r, g, b)
                 EmulationType.EKTAR -> ektar(r, g, b)
@@ -397,6 +405,90 @@ object ImageProcessor {
         val nb = clamp(b * 0.85f)
         splitTone(sCurve(nr, 0.4f), sCurve(ng, 0.35f), sCurve(nb, 0.38f),
             Triple(0.2f, -0.1f, -0.1f), Triple(0.05f, 0f, 0f))
+    }
+
+    private fun bleachBypassEmu(r: Float, g: Float, b: Float) = run {
+        val l = lum(r, g, b)
+        val nr = clamp(lerp(r, l, 0.6f))
+        val ng = clamp(lerp(g, l, 0.6f))
+        val nb = clamp(lerp(b, l, 0.6f))
+        val cr = sCurve(clamp((nr - 0.5f) * 1.6f + 0.5f), 0.5f)
+        val cg = sCurve(clamp((ng - 0.5f) * 1.6f + 0.5f), 0.5f)
+        val cb = sCurve(clamp((nb - 0.5f) * 1.6f + 0.5f), 0.5f)
+        Triple(clamp(cr * 0.95f + 0.02f), clamp(cg * 0.97f), clamp(cb * 0.93f + 0.01f))
+    }
+
+    private fun technicolor(r: Float, g: Float, b: Float) = run {
+        val nr = clamp(r * 1.4f + 0.05f)
+        val ng = clamp(g * 0.85f + 0.02f)
+        val nb = clamp(b * 0.85f + 0.08f)
+        splitTone(sCurve(nr, 0.5f), sCurve(ng, 0.4f), sCurve(nb, 0.45f),
+            Triple(0.35f, -0.1f, 0f), Triple(0f, 0.1f, 0.2f))
+    }
+
+    private fun filmNoirEmu(r: Float, g: Float, b: Float) = run {
+        val l = lum(r, g, b)
+        val contrast = clamp((l - 0.5f) * 2.2f + 0.5f)
+        val crushed = sCurve(contrast, 0.7f)
+        Triple(crushed, crushed * 0.99f, crushed * 0.98f)
+    }
+
+    private fun neonNoir(r: Float, g: Float, b: Float) = run {
+        val l = lum(r, g, b)
+        val nr: Float; val ng: Float; val nb: Float
+        if (l < 0.35f) {
+            nr = clamp(r * 0.7f + 0.05f)
+            ng = clamp(g * 0.6f + 0.02f)
+            nb = clamp(b * 1.3f + 0.15f)
+        } else {
+            nr = clamp(r * 1.3f + 0.08f)
+            ng = clamp(g * 0.8f - 0.02f)
+            nb = clamp(b * 0.75f + 0.1f)
+        }
+        splitTone(sCurve(nr, 0.5f), sCurve(ng, 0.4f), sCurve(nb, 0.45f),
+            Triple(0.2f, -0.15f, 0.3f), Triple(-0.1f, 0.05f, 0.25f))
+    }
+
+    private fun vintageChromeEmu(r: Float, g: Float, b: Float) = run {
+        val nr = clamp(r * 1.05f + 0.1f)
+        val ng = clamp(g * 0.9f + 0.04f)
+        val nb = clamp(b * 0.78f + 0.02f)
+        val nr2 = liftBlacks(sCurve(nr, 0.3f), 0.12f)
+        val ng2 = liftBlacks(sCurve(ng, 0.25f), 0.1f)
+        val nb2 = liftBlacks(sCurve(nb, 0.28f), 0.08f)
+        Triple(clamp(nr2 * 0.98f), clamp(ng2 * 0.97f), clamp(nb2 * 0.96f))
+    }
+
+    private fun analogWarm(r: Float, g: Float, b: Float) = run {
+        val nr = clamp(r * 1.15f + 0.12f)
+        val ng = clamp(g * 1.0f + 0.06f)
+        val nb = clamp(b * 0.72f - 0.02f)
+        val nr2 = liftBlacks(sCurve(nr, 0.35f), 0.1f)
+        val ng2 = liftBlacks(sCurve(ng, 0.28f), 0.08f)
+        val nb2 = liftBlacks(sCurve(nb, 0.32f), 0.06f)
+        splitTone(nr2, ng2, nb2, Triple(0.2f, 0.1f, -0.1f), Triple(0.08f, 0.04f, -0.05f))
+    }
+
+    private fun dayForNight(r: Float, g: Float, b: Float) = run {
+        val nr = clamp(r * 0.4f + 0.03f)
+        val ng = clamp(g * 0.45f + 0.04f)
+        val nb = clamp(b * 0.75f + 0.12f)
+        val nr2 = sCurve(nr, 0.3f)
+        val ng2 = sCurve(ng, 0.25f)
+        val nb2 = sCurve(nb, 0.4f)
+        splitTone(nr2, ng2, nb2, Triple(-0.1f, -0.05f, 0.3f), Triple(-0.05f, 0f, 0.15f))
+    }
+
+    private fun silverRetention(r: Float, g: Float, b: Float) = run {
+        val l = lum(r, g, b)
+        val nr = clamp(lerp(r, l, 0.75f))
+        val ng = clamp(lerp(g, l, 0.75f))
+        val nb = clamp(lerp(b, l, 0.75f))
+        val contrast = clamp((l - 0.5f) * 1.9f + 0.5f)
+        val cr = sCurve(clamp(lerp(nr, contrast, 0.4f)), 0.6f)
+        val cg = sCurve(clamp(lerp(ng, contrast, 0.4f)), 0.6f)
+        val cb = sCurve(clamp(lerp(nb, contrast, 0.4f)), 0.58f)
+        Triple(clamp(cr + 0.01f), clamp(cg), clamp(cb - 0.01f))
     }
 
     // ── Natural / Stylistic ────────────────────────────────────────

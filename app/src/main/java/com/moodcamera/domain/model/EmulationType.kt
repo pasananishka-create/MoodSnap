@@ -140,6 +140,46 @@ enum class EmulationType(
         description = "Punchy red-biased color film",
         category = EmulationCategory.CINEMATIC
     ),
+    BLEACH_BYPASS(
+        displayName = "Bleach Bypass",
+        description = "Desaturated high contrast cinema",
+        category = EmulationCategory.CINEMATIC
+    ),
+    TECHNICOLOR(
+        displayName = "Technicolor",
+        description = "Vivid three-strip primary color",
+        category = EmulationCategory.CINEMATIC
+    ),
+    NOIR(
+        displayName = "Film Noir",
+        description = "High contrast B&W cinema",
+        category = EmulationCategory.CINEMATIC
+    ),
+    NEON_NOIR(
+        displayName = "Neon Noir",
+        description = "Cyberpunk teal-magenta neon",
+        category = EmulationCategory.CINEMATIC
+    ),
+    VINTAGE_CHROME(
+        displayName = "Vintage Chrome",
+        description = "Muted retro 70s film",
+        category = EmulationCategory.CINEMATIC
+    ),
+    ANALOG_WARM(
+        displayName = "Analog Warm",
+        description = "Golden 70s cinema warmth",
+        category = EmulationCategory.CINEMATIC
+    ),
+    DAY_FOR_NIGHT(
+        displayName = "Day for Night",
+        description = "Blue moonlit darkness",
+        category = EmulationCategory.CINEMATIC
+    ),
+    SILVER_RETENTION(
+        displayName = "Silver Retention",
+        description = "Extreme desat gritty cinema",
+        category = EmulationCategory.CINEMATIC
+    ),
     VELVIA(
         displayName = "Velvia 50",
         description = "Ultra vivid landscape slide film",
