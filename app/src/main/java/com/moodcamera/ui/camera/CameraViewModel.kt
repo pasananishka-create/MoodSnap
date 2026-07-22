@@ -45,7 +45,7 @@ import javax.inject.Inject
 data class CameraUiState(
     val settings: CameraSettings = CameraSettings(),
     val isCapturing: Boolean = false,
-    val isProcessing: Boolean = false,
+    val processingCount: Int = 0,
     val lastPhotoPath: String? = null,
     val sceneInfo: SceneInfo? = null,
     val showSceneInfo: Boolean = false,
@@ -151,6 +151,7 @@ class CameraViewModel @Inject constructor(
             ContextCompat.getMainExecutor(getApplication()),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    _uiState.update { it.copy(isCapturing = false) }
                     viewModelScope.launch {
                         processAndSavePhoto(tempFile.absolutePath)
                     }
@@ -170,22 +171,16 @@ class CameraViewModel @Inject constructor(
     }
 
     private suspend fun processAndSavePhoto(tempPath: String) {
+        _uiState.update { it.copy(processingCount = it.processingCount + 1) }
         withContext(Dispatchers.IO) {
             var originalBitmap: Bitmap? = null
             var processedBitmap: Bitmap? = null
             try {
-                _uiState.update { it.copy(isProcessing = true) }
-
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
                 originalBitmap = BitmapFactory.decodeFile(tempPath, options)
-                if (originalBitmap == null) {
-                    _uiState.update {
-                        it.copy(isCapturing = false, isProcessing = false, errorMessage = "Failed to decode image")
-                    }
-                    return@withContext
-                }
+                if (originalBitmap == null) return@withContext
 
                 val settings = _uiState.value.settings
                 processedBitmap = ImageProcessor.processImage(
@@ -222,26 +217,15 @@ class CameraViewModel @Inject constructor(
 
                 try { saveToGallery(processedBitmap) } catch (_: Exception) {}
 
-                _uiState.update {
-                    it.copy(
-                        isCapturing = false,
-                        isProcessing = false,
-                        lastPhotoPath = processedFile.absolutePath
-                    )
-                }
+                _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath) }
             } catch (e: Exception) {
                 android.util.Log.e("MoodSnap", "Process failed: ${e.javaClass.simpleName}: ${e.message}", e)
-                _uiState.update {
-                    it.copy(
-                        isCapturing = false,
-                        isProcessing = false,
-                        errorMessage = "Processing failed: ${e.javaClass.simpleName}"
-                    )
-                }
+                _uiState.update { it.copy(errorMessage = "Processing failed: ${e.javaClass.simpleName}") }
             } finally {
                 try { originalBitmap?.recycle() } catch (_: Exception) {}
                 try { processedBitmap?.recycle() } catch (_: Exception) {}
                 try { File(tempPath).delete() } catch (_: Exception) {}
+                _uiState.update { it.copy(processingCount = maxOf(0, it.processingCount - 1)) }
             }
         }
     }

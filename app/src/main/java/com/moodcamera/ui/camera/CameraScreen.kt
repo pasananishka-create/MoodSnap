@@ -326,8 +326,11 @@ fun CameraScreen(
             )
         }
 
-        if (uiState.isProcessing) {
-            ProcessingOverlay()
+        if (uiState.processingCount > 0) {
+            ProcessingBadge(
+                count = uiState.processingCount,
+                modifier = Modifier.align(Alignment.TopEnd)
+            )
         }
 
         uiState.errorMessage?.let { error ->
@@ -638,7 +641,7 @@ private fun SettingsPanel(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("AI Enhance", color = if (uiState.settings.isAiEnhanceEnabled) MoodAccent else Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text("ESRGAN Neural Net", color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
+                    Text("Sharpness + Color", color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
                 }
             }
             Box(
@@ -753,28 +756,24 @@ private fun CameraBottomBar(
                     .clip(CircleShape)
                     .border(2.5.dp, Color.White, CircleShape)
                     .background(Color.Transparent)
-                    .clickable(enabled = !uiState.isCapturing) { onCapture() },
+                    .clickable { onCapture() },
                 contentAlignment = Alignment.Center
             ) {
-                if (uiState.isCapturing) {
-                    CircularProgressIndicator(modifier = Modifier.size(30.dp), color = MoodAccent, strokeWidth = 2.5.dp)
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(58.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .drawBehind {
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        colors = listOf(Color.White, Color(0xFFCCCCCC)),
-                                        center = Offset(size.width * 0.4f, size.height * 0.35f),
-                                        radius = size.width * 0.5f
-                                    )
+                Box(
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .drawBehind {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(Color.White, Color(0xFFCCCCCC)),
+                                    center = Offset(size.width * 0.4f, size.height * 0.35f),
+                                    radius = size.width * 0.5f
                                 )
-                            }
-                    )
-                }
+                            )
+                        }
+                )
             }
 
             IconButton(onClick = onSettingsClick, modifier = Modifier.size(44.dp)) {
@@ -816,15 +815,24 @@ private fun GridOverlay(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ProcessingOverlay(modifier: Modifier = Modifier) {
+private fun ProcessingBadge(count: Int, modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier.fillMaxSize().background(MoodBlack.copy(alpha = 0.75f)),
-        contentAlignment = Alignment.Center
+        modifier = modifier
+            .padding(top = 56.dp, end = 12.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(GlassBgHeavy)
+            .border(0.5.dp, MoodAccent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(modifier = Modifier.size(44.dp), color = MoodAccent, strokeWidth = 2.5.dp)
-            Spacer(modifier = Modifier.height(14.dp))
-            Text(text = "Processing...", color = MoodAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(modifier = Modifier.size(12.dp), color = MoodAccent, strokeWidth = 1.5.dp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (count == 1) "Processing..." else "Processing $count...",
+                color = MoodAccent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }
