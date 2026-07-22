@@ -21,7 +21,7 @@ data class CameraSettings(
     val halationIntensity: Float = 0.3f,
     val vignette: Float = 0.0f,
     val isAutoFilterEnabled: Boolean = false,
-    val isGrainEnabled: Boolean = true,
+    val isGrainEnabled: Boolean = false,
     val isHalationEnabled: Boolean = true,
     val isFrameEnabled: Boolean = false,
     val isGridEnabled: Boolean = false,

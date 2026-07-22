@@ -190,16 +190,18 @@ class CameraViewModel @Inject constructor(
                     if (aiResult !== processedBitmap) {
                         processedBitmap = aiResult
                     }
+                    processedBitmap = AiEnhancer.upscaleTo4K(processedBitmap)
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     if (hdResult !== processedBitmap) {
                         processedBitmap = hdResult
                     }
+                    processedBitmap = AiEnhancer.upscaleTo4K(processedBitmap)
                 }
 
                 val processedFile = photoRepository.createPhotoFile()
                 val fos = processedFile.outputStream()
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
                 fos.close()
 
                 val photoEntity = PhotoEntity(
@@ -248,7 +250,7 @@ class CameraViewModel @Inject constructor(
         uri?.let {
             try {
                 resolver.openOutputStream(it)?.use { stream ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 98, stream)
                 }
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     contentValues.clear()

@@ -8,9 +8,13 @@ import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.PI
 import kotlin.math.sqrt
 
 object AiEnhancer {
+
+    private const val TARGET_4K = 3840
 
     fun enhance(bitmap: Bitmap, intensity: Float = 1f): Bitmap {
         val w = bitmap.width
@@ -30,6 +34,76 @@ object AiEnhancer {
 
         src.setPixels(result, 0, w, 0, 0, w, h)
         return src
+    }
+
+    fun upscaleTo4K(bitmap: Bitmap): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w >= TARGET_4K && h >= TARGET_4K) return bitmap
+
+        val newW: Int
+        val newH: Int
+        if (w >= h) {
+            newW = TARGET_4K
+            newH = (h.toFloat() / w * TARGET_4K).roundToInt()
+        } else {
+            newH = TARGET_4K
+            newW = (w.toFloat() / h * TARGET_4K).roundToInt()
+        }
+
+        val src = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val srcPixels = IntArray(w * h)
+        src.getPixels(srcPixels, 0, w, 0, 0, w, h)
+
+        val dstPixels = IntArray(newW * newH)
+
+        for (dy in 0 until newH) {
+            for (dx in 0 until newW) {
+                val srcX = dx.toFloat() / newW * w
+                val srcY = dy.toFloat() / newH * h
+
+                var sumR = 0f; var sumG = 0f; var sumB = 0f; var sumW = 0f
+
+                for (sy in (srcY - 2).toInt()..(srcY + 2).toInt()) {
+                    for (sx in (srcX - 2).toInt()..(srcX + 2).toInt()) {
+                        val px = sx.coerceIn(0, w - 1)
+                        val py = sy.coerceIn(0, h - 1)
+                        val weight = lanczos3(srcX - px) * lanczos3(srcY - py)
+                        if (weight <= 0f) continue
+
+                        val pixel = srcPixels[py * w + px]
+                        sumR += Color.red(pixel) * weight
+                        sumG += Color.green(pixel) * weight
+                        sumB += Color.blue(pixel) * weight
+                        sumW += weight
+                    }
+                }
+
+                if (sumW > 0f) {
+                    dstPixels[dy * newW + dx] = Color.rgb(
+                        (sumR / sumW).roundToInt().coerceIn(0, 255),
+                        (sumG / sumW).roundToInt().coerceIn(0, 255),
+                        (sumB / sumW).roundToInt().coerceIn(0, 255)
+                    )
+                } else {
+                    dstPixels[dy * newW + dx] = srcPixels[
+                        srcY.toInt().coerceIn(0, h - 1) * w + srcX.toInt().coerceIn(0, w - 1)
+                    ]
+                }
+            }
+        }
+
+        val result = Bitmap.createBitmap(newW, newH, Bitmap.Config.ARGB_8888)
+        result.setPixels(dstPixels, 0, newW, 0, 0, newW, newH)
+        src.recycle()
+        return result
+    }
+
+    private fun lanczos3(x: Float): Float {
+        val ax = abs(x)
+        if (ax >= 3f) return 0f
+        if (ax < 0.0001f) return 1f
+        return (3f * sin(PI.toFloat() * ax) * sin(PI.toFloat() * ax / 3f)) / (PI.toFloat() * PI.toFloat() * ax * ax)
     }
 
     fun isReady(): Boolean = true
