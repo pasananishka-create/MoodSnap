@@ -17,7 +17,7 @@ object AiEnhancer {
         val h = bitmap.height
         if (w < 4 || h < 4) return bitmap
 
-        val src = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        val src = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val pixels = IntArray(w * h)
         src.getPixels(pixels, 0, w, 0, 0, w, h)
 

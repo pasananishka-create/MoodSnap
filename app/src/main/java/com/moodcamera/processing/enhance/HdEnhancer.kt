@@ -13,7 +13,7 @@ object HdEnhancer {
     fun enhance(bitmap: Bitmap, intensity: Float = 1f): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
-        val src = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        val src = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val pixels = IntArray(w * h)
         src.getPixels(pixels, 0, w, 0, 0, w, h)
 
