@@ -44,7 +44,6 @@ import javax.inject.Inject
 
 data class CameraUiState(
     val settings: CameraSettings = CameraSettings(),
-    val isCapturing: Boolean = false,
     val processingCount: Int = 0,
     val lastPhotoPath: String? = null,
     val sceneInfo: SceneInfo? = null,
@@ -55,7 +54,8 @@ data class CameraUiState(
     val photoCount: Int = 0,
     val errorMessage: String? = null,
     val showSettings: Boolean = false,
-    val autoFilterStatus: String? = null
+    val autoFilterStatus: String? = null,
+    val savedMessage: String? = null
 )
 
 @HiltViewModel
@@ -139,9 +139,6 @@ class CameraViewModel @Inject constructor(
 
     fun takePhoto() {
         val capture = imageCapture ?: return
-        if (_uiState.value.isCapturing) return
-
-        _uiState.update { it.copy(isCapturing = true) }
 
         val tempFile = photoRepository.createTempPhotoFile()
         val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
@@ -151,7 +148,6 @@ class CameraViewModel @Inject constructor(
             ContextCompat.getMainExecutor(getApplication()),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    _uiState.update { it.copy(isCapturing = false) }
                     viewModelScope.launch {
                         processAndSavePhoto(tempFile.absolutePath)
                     }
@@ -160,10 +156,7 @@ class CameraViewModel @Inject constructor(
                 override fun onError(exception: ImageCaptureException) {
                     tempFile.delete()
                     _uiState.update {
-                        it.copy(
-                            isCapturing = false,
-                            errorMessage = "Capture failed: ${exception.message}"
-                        )
+                        it.copy(errorMessage = "Capture failed: ${exception.message}")
                     }
                 }
             }
@@ -180,7 +173,10 @@ class CameraViewModel @Inject constructor(
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
                 originalBitmap = BitmapFactory.decodeFile(tempPath, options)
-                if (originalBitmap == null) return@withContext
+                if (originalBitmap == null) {
+                    android.util.Log.e("MoodSnap", "Failed to decode: $tempPath")
+                    return@withContext
+                }
 
                 val settings = _uiState.value.settings
                 processedBitmap = ImageProcessor.processImage(
@@ -215,12 +211,14 @@ class CameraViewModel @Inject constructor(
                 )
                 photoRepository.insertPhoto(photoEntity)
 
-                try { saveToGallery(processedBitmap) } catch (_: Exception) {}
+                try { saveToGallery(processedBitmap) } catch (e: Exception) {
+                    android.util.Log.e("MoodSnap", "Gallery save failed: ${e.message}", e)
+                }
 
-                _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath) }
+                _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath, savedMessage = "Saved") }
             } catch (e: Exception) {
                 android.util.Log.e("MoodSnap", "Process failed: ${e.javaClass.simpleName}: ${e.message}", e)
-                _uiState.update { it.copy(errorMessage = "Processing failed: ${e.javaClass.simpleName}") }
+                _uiState.update { it.copy(errorMessage = "Failed: ${e.javaClass.simpleName}: ${e.message}") }
             } finally {
                 try { originalBitmap?.recycle() } catch (_: Exception) {}
                 try { processedBitmap?.recycle() } catch (_: Exception) {}
@@ -416,6 +414,10 @@ class CameraViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun clearSavedMessage() {
+        _uiState.update { it.copy(savedMessage = null) }
     }
 
     override fun onCleared() {

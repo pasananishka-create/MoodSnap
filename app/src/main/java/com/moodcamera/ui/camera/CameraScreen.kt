@@ -326,10 +326,16 @@ fun CameraScreen(
             )
         }
 
-        if (uiState.processingCount > 0) {
-            ProcessingBadge(
-                count = uiState.processingCount,
-                modifier = Modifier.align(Alignment.TopEnd)
+        if (uiState.savedMessage != null) {
+            LaunchedEffect(uiState.savedMessage) {
+                kotlinx.coroutines.delay(1500)
+                viewModel.clearSavedMessage()
+            }
+            SavedToast(
+                message = uiState.savedMessage!!,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 160.dp)
             )
         }
 
@@ -815,25 +821,15 @@ private fun GridOverlay(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ProcessingBadge(count: Int, modifier: Modifier = Modifier) {
+private fun SavedToast(message: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .padding(top = 56.dp, end = 12.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(GlassBgHeavy)
+            .background(MoodAccent.copy(alpha = 0.2f))
             .border(0.5.dp, MoodAccent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(modifier = Modifier.size(12.dp), color = MoodAccent, strokeWidth = 1.5.dp)
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = if (count == 1) "Processing..." else "Processing $count...",
-                color = MoodAccent,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
+        Text(text = message, color = MoodAccent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 
