@@ -171,14 +171,16 @@ class CameraViewModel @Inject constructor(
 
     private suspend fun processAndSavePhoto(tempPath: String) {
         withContext(Dispatchers.IO) {
+            var originalBitmap: Bitmap? = null
+            var processedBitmap: Bitmap? = null
             try {
                 _uiState.update { it.copy(isProcessing = true) }
 
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
-                val originalBitmap = BitmapFactory.decodeFile(tempPath, options) ?: run {
-                    File(tempPath).delete()
+                originalBitmap = BitmapFactory.decodeFile(tempPath, options)
+                if (originalBitmap == null) {
                     _uiState.update {
                         it.copy(isCapturing = false, isProcessing = false, errorMessage = "Failed to decode image")
                     }
@@ -186,7 +188,7 @@ class CameraViewModel @Inject constructor(
                 }
 
                 val settings = _uiState.value.settings
-                var processedBitmap = ImageProcessor.processImage(
+                processedBitmap = ImageProcessor.processImage(
                     original = originalBitmap,
                     settings = settings,
                     quality = settings.qualityType
@@ -195,19 +197,19 @@ class CameraViewModel @Inject constructor(
                 if (settings.isAiEnhanceEnabled) {
                     val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     if (aiResult !== processedBitmap) {
-                        processedBitmap.recycle()
                         processedBitmap = aiResult
                     }
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     if (hdResult !== processedBitmap) {
-                        processedBitmap.recycle()
                         processedBitmap = hdResult
                     }
                 }
 
                 val processedFile = photoRepository.createPhotoFile()
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, processedFile.outputStream())
+                val fos = processedFile.outputStream()
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                fos.close()
 
                 val photoEntity = PhotoEntity(
                     filePath = processedFile.absolutePath,
@@ -218,11 +220,7 @@ class CameraViewModel @Inject constructor(
                 )
                 photoRepository.insertPhoto(photoEntity)
 
-                saveToGallery(processedBitmap)
-
-                originalBitmap.recycle()
-                processedBitmap.recycle()
-                File(tempPath).delete()
+                try { saveToGallery(processedBitmap) } catch (_: Exception) {}
 
                 _uiState.update {
                     it.copy(
@@ -232,14 +230,18 @@ class CameraViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                File(tempPath).delete()
+                android.util.Log.e("MoodSnap", "Process failed: ${e.javaClass.simpleName}: ${e.message}", e)
                 _uiState.update {
                     it.copy(
                         isCapturing = false,
                         isProcessing = false,
-                        errorMessage = "Processing failed: ${e.message}"
+                        errorMessage = "Processing failed: ${e.javaClass.simpleName}"
                     )
                 }
+            } finally {
+                try { originalBitmap?.recycle() } catch (_: Exception) {}
+                try { processedBitmap?.recycle() } catch (_: Exception) {}
+                try { File(tempPath).delete() } catch (_: Exception) {}
             }
         }
     }

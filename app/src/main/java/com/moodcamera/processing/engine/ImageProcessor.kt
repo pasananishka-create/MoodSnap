@@ -78,12 +78,7 @@ object ImageProcessor {
             result = v
         }
 
-        // HD Enhancement pipeline (applied last for maximum quality)
-        if (settings.isHdEnabled && settings.hdIntensity > 0f) {
-            val hd = HdEnhancer.enhance(result, settings.hdIntensity)
-            if (hd !== result) result.recycle()
-            result = hd
-        }
+        // HD Enhancement is handled by ViewModel, not here
 
         return result
     }
