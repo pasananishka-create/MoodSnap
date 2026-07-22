@@ -28,6 +28,7 @@ import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
+
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -191,25 +192,11 @@ class CameraViewModel @Inject constructor(
                     quality = settings.qualityType
                 )
 
-                if (settings.isAiEnhanceEnabled && AiEnhancer.isReady()) {
-                    try {
-                        val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                        if (aiResult !== processedBitmap) {
-                            processedBitmap.recycle()
-                            processedBitmap = aiResult
-                        }
-                    } catch (e: Exception) {
-                        val aiErr = AiEnhancer.getLastError() ?: e.message ?: "unknown"
-                        android.util.Log.e("MoodSnap", "AI enhance failed: $aiErr", e)
-                        if (settings.isHdEnabled) {
-                            try {
-                                val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                                if (hdResult !== processedBitmap) {
-                                    processedBitmap.recycle()
-                                    processedBitmap = hdResult
-                                }
-                            } catch (_: Exception) {}
-                        }
+                if (settings.isAiEnhanceEnabled) {
+                    val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
+                    if (aiResult !== processedBitmap) {
+                        processedBitmap.recycle()
+                        processedBitmap = aiResult
                     }
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
