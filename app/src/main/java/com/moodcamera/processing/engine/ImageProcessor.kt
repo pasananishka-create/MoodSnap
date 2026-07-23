@@ -40,8 +40,9 @@ object ImageProcessor {
         settings: CameraSettings,
         quality: QualityType
     ): Bitmap {
-        val src = downscaleIfNeeded(original.copy(Bitmap.Config.ARGB_8888, true))
-        if (src !== original) original.recycle()
+        val copy = original.copy(Bitmap.Config.ARGB_8888, true)
+        val src = downscaleIfNeeded(copy)
+        if (src !== copy) copy.recycle()
 
         val width = src.width
         val height = src.height

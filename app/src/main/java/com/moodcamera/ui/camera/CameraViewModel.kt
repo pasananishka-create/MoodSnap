@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -33,6 +34,7 @@ import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
 
+import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -177,10 +179,31 @@ class CameraViewModel @Inject constructor(
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
-                val originalBitmap = BitmapFactory.decodeFile(tempPath, options)
+                var originalBitmap = BitmapFactory.decodeFile(tempPath, options)
                 if (originalBitmap == null) {
                     android.util.Log.e("MoodSnap", "Failed to decode: $tempPath")
                     return@withContext
+                }
+
+                val exifOrientation = try {
+                    val exif = ExifInterface(tempPath)
+                    exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
+
+                if (exifOrientation != ExifInterface.ORIENTATION_NORMAL) {
+                    val matrix = Matrix()
+                    when (exifOrientation) {
+                        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+                        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+                        ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+                        ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+                    }
+                    val rotated = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
+                    if (rotated !== originalBitmap) originalBitmap.recycle()
+                    originalBitmap = rotated
                 }
 
                 val settings = _uiState.value.settings
@@ -210,9 +233,9 @@ class CameraViewModel @Inject constructor(
                 finalBitmap = processedBitmap
 
                 val processedFile = photoRepository.createPhotoFile()
-                val fos = processedFile.outputStream()
-                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
-                fos.close()
+                processedFile.outputStream().use { fos ->
+                    finalBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                }
 
                 val photoEntity = PhotoEntity(
                     filePath = processedFile.absolutePath,

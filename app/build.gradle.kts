@@ -91,6 +91,9 @@ dependencies {
     // DataStore
     implementation(libs.datastore.preferences)
 
+    // ExifInterface
+    implementation(libs.exifinterface)
+
     // Coil
     implementation(libs.coil.compose)
 }

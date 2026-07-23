@@ -174,7 +174,7 @@ fun CameraScreen(
                 val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
                 cachedSourceBitmap = src
                 val processed = withContext(Dispatchers.Default) {
-                    ImageProcessor.processImage(src, uiState.settings, com.moodcamera.domain.model.QualityType.DIGI)
+                    PreviewProcessor.processPreview(src, uiState.settings)
                 }
                 livePreviewBitmap = processed
             }
@@ -184,7 +184,7 @@ fun CameraScreen(
     LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {
         val src = cachedSourceBitmap ?: return@LaunchedEffect
         val processed = withContext(Dispatchers.Default) {
-            ImageProcessor.processImage(src, uiState.settings, com.moodcamera.domain.model.QualityType.DIGI)
+            PreviewProcessor.processPreview(src, uiState.settings)
         }
         val old = livePreviewBitmap
         livePreviewBitmap = processed
