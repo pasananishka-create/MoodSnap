@@ -4,6 +4,10 @@ import android.app.Application
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.MediaStore
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -140,6 +144,8 @@ class CameraViewModel @Inject constructor(
     fun takePhoto() {
         val capture = imageCapture ?: return
 
+        triggerHaptic()
+
         val tempFile = photoRepository.createTempPhotoFile()
         val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
 
@@ -166,64 +172,70 @@ class CameraViewModel @Inject constructor(
     private suspend fun processAndSavePhoto(tempPath: String) {
         _uiState.update { it.copy(processingCount = it.processingCount + 1) }
         withContext(Dispatchers.IO) {
-            var originalBitmap: Bitmap? = null
-            var processedBitmap: Bitmap? = null
+            var finalBitmap: Bitmap? = null
             try {
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
-                originalBitmap = BitmapFactory.decodeFile(tempPath, options)
+                val originalBitmap = BitmapFactory.decodeFile(tempPath, options)
                 if (originalBitmap == null) {
                     android.util.Log.e("MoodSnap", "Failed to decode: $tempPath")
                     return@withContext
                 }
 
                 val settings = _uiState.value.settings
-                processedBitmap = ImageProcessor.processImage(
+                var processedBitmap = ImageProcessor.processImage(
                     original = originalBitmap,
                     settings = settings,
                     quality = settings.qualityType
                 )
+                originalBitmap.recycle()
 
                 if (settings.isAiEnhanceEnabled) {
                     val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                    if (aiResult !== processedBitmap) {
-                        processedBitmap = aiResult
-                    }
-                    processedBitmap = AiEnhancer.upscaleTo4K(processedBitmap)
+                    processedBitmap.recycle()
+                    processedBitmap = aiResult
+                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
+                    processedBitmap.recycle()
+                    processedBitmap = upscaled
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
-                    if (hdResult !== processedBitmap) {
-                        processedBitmap = hdResult
-                    }
-                    processedBitmap = AiEnhancer.upscaleTo4K(processedBitmap)
+                    processedBitmap.recycle()
+                    processedBitmap = hdResult
+                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
+                    processedBitmap.recycle()
+                    processedBitmap = upscaled
                 }
+
+                finalBitmap = processedBitmap
 
                 val processedFile = photoRepository.createPhotoFile()
                 val fos = processedFile.outputStream()
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
                 fos.close()
 
                 val photoEntity = PhotoEntity(
                     filePath = processedFile.absolutePath,
                     originalFilePath = "",
                     presetName = settings.getPresetName(),
-                    width = processedBitmap.width,
-                    height = processedBitmap.height
+                    width = finalBitmap.width,
+                    height = finalBitmap.height
                 )
                 photoRepository.insertPhoto(photoEntity)
 
-                try { saveToGallery(processedBitmap) } catch (e: Exception) {
+                try { saveToGallery(finalBitmap) } catch (e: Exception) {
                     android.util.Log.e("MoodSnap", "Gallery save failed: ${e.message}", e)
                 }
 
                 _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath, savedMessage = "Saved") }
+            } catch (e: OutOfMemoryError) {
+                android.util.Log.e("MoodSnap", "OOM during processing", e)
+                _uiState.update { it.copy(errorMessage = "Photo too large for memory") }
             } catch (e: Exception) {
                 android.util.Log.e("MoodSnap", "Process failed: ${e.javaClass.simpleName}: ${e.message}", e)
                 _uiState.update { it.copy(errorMessage = "Failed: ${e.javaClass.simpleName}: ${e.message}") }
             } finally {
-                try { originalBitmap?.recycle() } catch (_: Exception) {}
-                try { processedBitmap?.recycle() } catch (_: Exception) {}
+                try { finalBitmap?.recycle() } catch (_: Exception) {}
                 try { File(tempPath).delete() } catch (_: Exception) {}
                 _uiState.update { it.copy(processingCount = maxOf(0, it.processingCount - 1)) }
             }
@@ -420,6 +432,18 @@ class CameraViewModel @Inject constructor(
 
     fun clearSavedMessage() {
         _uiState.update { it.copy(savedMessage = null) }
+    }
+
+    private fun triggerHaptic() {
+        val context = getApplication<Application>()
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vm = context.getSystemService(Application.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vm.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Application.VIBRATOR_SERVICE) as Vibrator
+        }
+        vibrator.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
     override fun onCleared() {
