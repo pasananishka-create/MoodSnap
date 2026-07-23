@@ -2,6 +2,24 @@ package com.moodcamera.domain.model
 
 import com.moodcamera.processing.enhance.CinematicLut
 
+enum class FlashMode(val displayName: String) {
+    OFF("Off"),
+    ON("On"),
+    AUTO("Auto")
+}
+
+enum class CameraMode(val displayName: String) {
+    PHOTO("Photo"),
+    PORTRAIT("Portrait"),
+    NIGHT("Night")
+}
+
+enum class TimerDuration(val displayName: String, val seconds: Int) {
+    OFF("Off", 0),
+    THREE("3s", 3),
+    TEN("10s", 10)
+}
+
 data class CameraSettings(
     val emulationType: EmulationType = EmulationType.PORTRA,
     val toneType: ToneType = ToneType.NEUTRAL,
@@ -25,7 +43,10 @@ data class CameraSettings(
     val isHalationEnabled: Boolean = true,
     val isFrameEnabled: Boolean = false,
     val isGridEnabled: Boolean = false,
-    val isFrontCamera: Boolean = false
+    val isFrontCamera: Boolean = false,
+    val flashMode: FlashMode = FlashMode.OFF,
+    val timerDuration: TimerDuration = TimerDuration.OFF,
+    val cameraMode: CameraMode = CameraMode.PHOTO
 ) {
     fun getPresetName(): String {
         val lutName = cinematicLut?.displayName?.let { " + $it" } ?: ""

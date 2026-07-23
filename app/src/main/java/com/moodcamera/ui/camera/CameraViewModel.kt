@@ -28,6 +28,8 @@ import com.moodcamera.data.repository.PresetRepository
 import com.moodcamera.domain.model.AspectRatio
 import com.moodcamera.domain.model.CameraSettings
 import com.moodcamera.domain.model.EmulationType
+import com.moodcamera.domain.model.FlashMode
+import com.moodcamera.domain.model.TimerDuration
 import com.moodcamera.domain.model.QualityType
 import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
@@ -61,7 +63,10 @@ data class CameraUiState(
     val errorMessage: String? = null,
     val showSettings: Boolean = false,
     val autoFilterStatus: String? = null,
-    val savedMessage: String? = null
+    val savedMessage: String? = null,
+    val timerCountdown: Int = 0,
+    val isTimerActive: Boolean = false,
+    val zoomPreset: Float = 1f
 )
 
 @HiltViewModel
@@ -144,6 +149,28 @@ class CameraViewModel @Inject constructor(
     }
 
     fun takePhoto() {
+        val timerSeconds = _uiState.value.settings.timerDuration.seconds
+        if (timerSeconds > 0) {
+            startTimer(timerSeconds)
+        } else {
+            capturePhoto()
+        }
+    }
+
+    private fun startTimer(seconds: Int) {
+        _uiState.update { it.copy(isTimerActive = true, timerCountdown = seconds) }
+        viewModelScope.launch {
+            for (i in seconds downTo 1) {
+                _uiState.update { it.copy(timerCountdown = i) }
+                triggerHaptic()
+                kotlinx.coroutines.delay(1000)
+            }
+            _uiState.update { it.copy(isTimerActive = false, timerCountdown = 0) }
+            capturePhoto()
+        }
+    }
+
+    private fun capturePhoto() {
         val capture = imageCapture ?: return
 
         triggerHaptic()
@@ -380,10 +407,21 @@ class CameraViewModel @Inject constructor(
         _uiState.update { it.copy(settings = it.settings.copy(isHalationEnabled = !it.settings.isHalationEnabled)) }
     }
 
-    fun toggleFlash() {
-        val newState = !_uiState.value.flashEnabled
-        camera?.cameraControl?.enableTorch(newState)
-        _uiState.update { it.copy(flashEnabled = newState) }
+    fun cycleFlashMode() {
+        val current = _uiState.value.settings.flashMode
+        val next = when (current) {
+            FlashMode.OFF -> FlashMode.AUTO
+            FlashMode.AUTO -> FlashMode.ON
+            FlashMode.ON -> FlashMode.OFF
+        }
+        val torchOn = next == FlashMode.ON
+        camera?.cameraControl?.enableTorch(torchOn)
+        _uiState.update {
+            it.copy(
+                settings = it.settings.copy(flashMode = next),
+                flashEnabled = torchOn
+            )
+        }
     }
 
     fun cycleZoom() {
@@ -447,6 +485,21 @@ class CameraViewModel @Inject constructor(
 
     fun toggleAiEnhance() {
         _uiState.update { it.copy(settings = it.settings.copy(isAiEnhanceEnabled = !it.settings.isAiEnhanceEnabled)) }
+    }
+
+    fun cycleTimer() {
+        val entries = TimerDuration.entries
+        val current = _uiState.value.settings.timerDuration
+        val nextIndex = (entries.indexOf(current) + 1) % entries.size
+        _uiState.update { it.copy(settings = it.settings.copy(timerDuration = entries[nextIndex])) }
+    }
+
+    fun setZoomPreset(preset: Float) {
+        val cam = camera ?: return
+        val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 0.5f
+        val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 10f
+        cam.cameraControl.setZoomRatio(preset.coerceIn(minZoom, maxZoom))
+        _uiState.update { it.copy(zoomPreset = preset) }
     }
 
     fun clearError() {
