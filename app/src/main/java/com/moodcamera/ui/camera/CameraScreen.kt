@@ -86,7 +86,9 @@ import com.moodcamera.domain.model.AspectRatio
 import com.moodcamera.domain.model.EmulationCategory
 import com.moodcamera.domain.model.EmulationType
 import com.moodcamera.domain.model.ToneType
+import com.moodcamera.domain.model.QualityType
 import com.moodcamera.processing.enhance.CinematicLut
+import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.engine.PreviewProcessor
 import com.moodcamera.ui.theme.MoodAccent
 import com.moodcamera.ui.theme.MoodBlack
@@ -172,7 +174,7 @@ fun CameraScreen(
                 val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
                 cachedSourceBitmap = src
                 val processed = withContext(Dispatchers.Default) {
-                    PreviewProcessor.processPreview(src, uiState.settings)
+                    ImageProcessor.processImage(src, uiState.settings, com.moodcamera.domain.model.QualityType.DIGI)
                 }
                 livePreviewBitmap = processed
             }
@@ -182,7 +184,7 @@ fun CameraScreen(
     LaunchedEffect(uiState.settings.emulationType, uiState.settings.toneType, uiState.settings.fade, uiState.settings.contrast, uiState.settings.brightness, uiState.settings.temperature, uiState.settings.vignette, uiState.settings.cinematicLut, uiState.settings.isGrainEnabled) {
         val src = cachedSourceBitmap ?: return@LaunchedEffect
         val processed = withContext(Dispatchers.Default) {
-            PreviewProcessor.processPreview(src, uiState.settings)
+            ImageProcessor.processImage(src, uiState.settings, com.moodcamera.domain.model.QualityType.DIGI)
         }
         val old = livePreviewBitmap
         livePreviewBitmap = processed

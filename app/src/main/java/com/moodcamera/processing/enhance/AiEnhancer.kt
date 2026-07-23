@@ -160,9 +160,9 @@ object AiEnhancer {
         val blur2 = boxBlur(pixels, w, h, 3)
         val blur3 = boxBlur(pixels, w, h, 6)
         val out = IntArray(pixels.size)
-        val fine = 1.8f * intensity
-        val med = 1.0f * intensity
-        val coarse = 0.5f * intensity
+        val fine = 0.8f * intensity
+        val med = 0.4f * intensity
+        val coarse = 0.2f * intensity
 
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]).toFloat()
@@ -192,8 +192,8 @@ object AiEnhancer {
         val blur1 = boxBlur(pixels, w, h, r1)
         val blur2 = boxBlur(pixels, w, h, r2)
         val out = IntArray(pixels.size)
-        val amt1 = 0.7f * intensity
-        val amt2 = 0.35f * intensity
+        val amt1 = 0.3f * intensity
+        val amt2 = 0.15f * intensity
 
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]).toFloat()
@@ -232,7 +232,7 @@ object AiEnhancer {
         val rangeG = max((hiG - loG), 1).toFloat()
         val rangeB = max((hiB - loB), 1).toFloat()
 
-        val amt = 0.5f * intensity
+        val amt = 0.2f * intensity
         val out = IntArray(pixels.size)
         for (i in pixels.indices) {
             val or = Color.red(pixels[i]).toFloat()
@@ -252,7 +252,7 @@ object AiEnhancer {
 
     private fun textureEnhance(pixels: IntArray, w: Int, h: Int, intensity: Float): IntArray {
         val out = IntArray(pixels.size)
-        val amt = 0.4f * intensity
+        val amt = 0.15f * intensity
 
         for (y in 1 until h - 1) {
             for (x in 1 until w - 1) {
@@ -289,7 +289,7 @@ object AiEnhancer {
 
     private fun colorBoost(pixels: IntArray, w: Int, h: Int, intensity: Float): IntArray {
         val out = IntArray(pixels.size)
-        val satBoost = 1f + 0.15f * intensity
+        val satBoost = 1f + 0.06f * intensity
 
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]).toFloat()
