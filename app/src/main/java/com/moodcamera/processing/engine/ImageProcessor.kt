@@ -21,7 +21,7 @@ import kotlin.math.sqrt
 
 object ImageProcessor {
 
-    private const val MAX_DIMENSION = 4096
+    private const val MAX_DIMENSION = 3000
 
     fun downscaleIfNeeded(bitmap: Bitmap): Bitmap {
         val w = bitmap.width
