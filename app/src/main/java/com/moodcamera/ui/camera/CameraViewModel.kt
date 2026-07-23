@@ -195,10 +195,16 @@ class CameraViewModel @Inject constructor(
                     val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     processedBitmap.recycle()
                     processedBitmap = aiResult
+                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
+                    if (upscaled !== processedBitmap) processedBitmap.recycle()
+                    processedBitmap = upscaled
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     processedBitmap.recycle()
                     processedBitmap = hdResult
+                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
+                    if (upscaled !== processedBitmap) processedBitmap.recycle()
+                    processedBitmap = upscaled
                 }
 
                 finalBitmap = processedBitmap
