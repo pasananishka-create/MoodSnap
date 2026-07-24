@@ -1,133 +1,200 @@
 package com.moodcamera.processing.enhance
 
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
-import kotlin.math.abs
-import kotlin.math.max
+import java.nio.FloatBuffer
+import java.util.Collections
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 object UpscaylUpscaler {
 
-    private const val MAX_LONGEST = 4000
+    private const val MODEL_FILE = "realesrgan-x4.onnx"
+    private const val SCALE = 4
+    private const val TILE_SIZE = 128
+    private const val MAX_INPUT_DIM = 512
 
-    fun init(context: Context) {}
-    fun close() {}
-    fun isReady(): Boolean = true
+    private var session: OrtSession? = null
+    private var env: OrtEnvironment? = null
+
+    fun init(context: Context) {
+        if (session != null) return
+        try {
+            env = OrtEnvironment.getEnvironment()
+            val modelBytes = context.assets.open(MODEL_FILE).use { it.readBytes() }
+            val options = OrtSession.SessionOptions().apply {
+                try {
+                    addNnapi()
+                } catch (_: Exception) {
+                    // NNAPI not available, fall back to CPU
+                }
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            }
+            session = env!!.createSession(modelBytes, options)
+            android.util.Log.i("UpscaylUpscaler", "Model loaded successfully")
+        } catch (e: Exception) {
+            android.util.Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
+            session = null
+        }
+    }
+
+    fun close() {
+        try { session?.close() } catch (_: Exception) {}
+        try { env?.close() } catch (_: Exception) {}
+        session = null
+        env = null
+    }
+
+    fun isReady(): Boolean = session != null
 
     fun upscale(bitmap: Bitmap): Bitmap {
+        val sess = session ?: return algorithmicUpscale(bitmap)
+        val ortEnv = env ?: return algorithmicUpscale(bitmap)
+
         val w = bitmap.width
         val h = bitmap.height
         if (w < 8 || h < 8) return bitmap
 
-        val longest = maxOf(w, h)
-        val scale = if (longest < MAX_LONGEST) {
-            min(3f, MAX_LONGEST.toFloat() / longest)
-        } else {
-            1f
-        }
-
-        val result = if (scale > 1.05f) {
-            val outW = (w * scale).roundToInt()
-            val outH = (h * scale).roundToInt()
-            val scaled = try {
-                Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
-            } catch (e: OutOfMemoryError) {
-                return enhanceOnly(bitmap)
-            }
-            val c = Canvas(scaled)
-            val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { isDither = true }
-            c.drawBitmap(bitmap, null, Rect(0, 0, outW, outH), p)
-            scaled
+        val src = if (w > MAX_INPUT_DIM || h > MAX_INPUT_DIM) {
+            val ratio = MAX_INPUT_DIM.toFloat() / maxOf(w, h)
+            val nw = (w * ratio).roundToInt().coerceAtLeast(8)
+            val nh = (h * ratio).roundToInt().coerceAtLeast(8)
+            Bitmap.createScaledBitmap(bitmap, nw, nh, true)
         } else {
             bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return bitmap
         }
 
-        enhanceInStrips(result)
+        val sw = src.width
+        val sh = src.height
+        val outW = sw * SCALE
+        val outH = sh * SCALE
+
+        val result = try {
+            Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e("UpscaylUpscaler", "OOM creating output")
+            if (src !== bitmap) src.recycle()
+            return algorithmicUpscale(bitmap)
+        }
+
+        val resultCanvas = Canvas(result)
+        val tileOverlap = 4
+        val step = TILE_SIZE - tileOverlap * 2
+
+        var ty = 0
+        while (ty < sh) {
+            var tx = 0
+            while (tx < sw) {
+                val tileW = min(TILE_SIZE, sw - tx)
+                val tileH = min(TILE_SIZE, sh - ty)
+
+                if (tileW < 8 || tileH < 8) { tx += step; continue }
+
+                try {
+                    val tileBitmap = Bitmap.createBitmap(src, tx, ty, tileW, tileH)
+                    val upscaled = runInference(sess, ortEnv, tileBitmap)
+                    tileBitmap.recycle()
+
+                    if (upscaled != null) {
+                        val dstX = tx * SCALE
+                        val dstY = ty * SCALE
+                        val oX = tileOverlap * SCALE
+                        val oY = tileOverlap * SCALE
+                        val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
+                        val dstRect = Rect(
+                            dstX + oX, dstY + oY,
+                            dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY
+                        )
+                        if (srcRect.width() > 0 && srcRect.height() > 0 &&
+                            dstRect.width() > 0 && dstRect.height() > 0
+                        ) {
+                            resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
+                        }
+                        upscaled.recycle()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
+                }
+
+                tx += step
+            }
+            ty += step
+        }
+
+        if (src !== bitmap) src.recycle()
         return result
     }
 
-    private fun enhanceOnly(bitmap: Bitmap): Bitmap {
-        val b = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return bitmap
-        enhanceInStrips(b)
-        return b
-    }
+    private fun runInference(sess: OrtSession, ortEnv: OrtEnvironment, tile: Bitmap): Bitmap? {
+        return try {
+            val w = tile.width
+            val h = tile.height
+            val pixels = IntArray(w * h)
+            tile.getPixels(pixels, 0, w, 0, 0, w, h)
 
-    private fun enhanceInStrips(bitmap: Bitmap) {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w < 3 || h < 3) return
-
-        val stripH = 64
-        var y = 1
-        while (y < h - 1) {
-            val yEnd = min(y + stripH, h - 1)
-            val rows = yEnd - y
-            val readH = rows + 2
-            val topY = maxOf(y - 1, 0)
-            val px = IntArray(w * readH)
-            bitmap.getPixels(px, 0, w, 0, topY, w, readH)
-
-            val out = IntArray(w * rows)
-
-            for (row in 0 until rows) {
-                val ry = row + 1
-                out[row * w] = px[ry * w]
-                out[row * w + w - 1] = px[ry * w + w - 1]
-
-                for (x in 1 until w - 1) {
-                    val idx = ry * w + x
-                    val c = px[idx]
-                    val l = px[idx - 1]
-                    val r = px[idx + 1]
-                    val u = px[idx - w]
-                    val d = px[idx + w]
-
-                    val cr = Color.red(c).toFloat()
-                    val cg = Color.green(c).toFloat()
-                    val cb = Color.blue(c).toFloat()
-
-                    val edgeH = (abs(Color.red(r) - Color.red(l)) + abs(Color.green(r) - Color.green(l)) + abs(Color.blue(r) - Color.blue(l))).toFloat()
-                    val edgeV = (abs(Color.red(u) - Color.red(d)) + abs(Color.green(u) - Color.green(d)) + abs(Color.blue(u) - Color.blue(d))).toFloat()
-                    val edge = min(edgeH + edgeV, 255f) / 255f
-
-                    val sharpenStrength = 0.15f + edge * 0.35f
-
-                    val avgR = (Color.red(l) + Color.red(r) + Color.red(u) + Color.red(d)) / 4f
-                    val avgG = (Color.green(l) + Color.green(r) + Color.green(u) + Color.green(d)) / 4f
-                    val avgB = (Color.blue(l) + Color.blue(r) + Color.blue(u) + Color.blue(d)) / 4f
-
-                    var sr = cr + (cr - avgR) * sharpenStrength
-                    var sg = cg + (cg - avgG) * sharpenStrength
-                    var sb = cb + (cb - avgB) * sharpenStrength
-
-                    val lum = 0.299f * sr + 0.587f * sg + 0.114f * sb
-                    val contrastFactor = 1.08f
-                    sr = ((sr - 128f) * contrastFactor + 128f)
-                    sg = ((sg - 128f) * contrastFactor + 128f)
-                    sb = ((sb - 128f) * contrastFactor + 128f)
-
-                    val satBoost = 1.1f
-                    val gl = 0.299f * sr + 0.587f * sg + 0.114f * sb
-                    sr = gl + satBoost * (sr - gl)
-                    sg = gl + satBoost * (sg - gl)
-                    sb = gl + satBoost * (sb - gl)
-
-                    out[row * w + x] = Color.rgb(
-                        sr.roundToInt().coerceIn(0, 255),
-                        sg.roundToInt().coerceIn(0, 255),
-                        sb.roundToInt().coerceIn(0, 255)
-                    )
-                }
+            val floatArray = FloatArray(3 * h * w)
+            for (i in pixels.indices) {
+                val px = pixels[i]
+                floatArray[i] = Color.red(px) / 255f
+                floatArray[w * h + i] = Color.green(px) / 255f
+                floatArray[2 * w * h + i] = Color.blue(px) / 255f
             }
 
-            bitmap.setPixels(out, 0, w, 0, y, w, rows)
-            y = yEnd
+            val shape = longArrayOf(1, 3, h.toLong(), w.toLong())
+            val inputTensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(floatArray), shape)
+            val inputName = sess.inputNames.first()
+            val results = sess.run(Collections.singletonMap(inputName, inputTensor))
+
+            @Suppress("UNCHECKED_CAST")
+            val output = results[0].value as Array<Array<Array<FloatArray>>>
+            val outH = output[0][0].size
+            val outW = output[0][0][0].size
+
+            val outBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            val outPixels = IntArray(outW * outH)
+            for (y in 0 until outH) {
+                for (x in 0 until outW) {
+                    val r = (output[0][0][y][x] * 255f).roundToInt().coerceIn(0, 255)
+                    val g = (output[0][1][y][x] * 255f).roundToInt().coerceIn(0, 255)
+                    val b = (output[0][2][y][x] * 255f).roundToInt().coerceIn(0, 255)
+                    outPixels[y * outW + x] = Color.rgb(r, g, b)
+                }
+            }
+            outBitmap.setPixels(outPixels, 0, outW, 0, 0, outW, outH)
+
+            inputTensor.close()
+            results.close()
+            outBitmap
+        } catch (e: Exception) {
+            android.util.Log.e("UpscaylUpscaler", "Inference failed: ${e.message}", e)
+            null
         }
+    }
+
+    private fun algorithmicUpscale(bitmap: Bitmap): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w < 8 || h < 8) return bitmap
+
+        val outW = w * 2
+        val outH = h * 2
+
+        val upscaled = try {
+            Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            return bitmap
+        }
+
+        val canvas = Canvas(upscaled)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { isDither = true }
+        canvas.drawBitmap(bitmap, null, Rect(0, 0, outW, outH), paint)
+        return upscaled
     }
 }
