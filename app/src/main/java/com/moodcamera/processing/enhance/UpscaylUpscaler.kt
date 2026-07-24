@@ -9,8 +9,8 @@ import kotlin.math.sin
 
 object UpscaylUpscaler {
 
-    private const val SCALE = 4
-    private const val MAX_INPUT_DIM = 512
+    private const val SCALE = 2
+    private const val MAX_INPUT_DIM = 1280
 
     fun init(context: Context) {
         // No-op: using CPU-based Lanczos upscaling (no ONNX dependency)

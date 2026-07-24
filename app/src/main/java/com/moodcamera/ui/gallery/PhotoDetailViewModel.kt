@@ -1,15 +1,15 @@
 package com.moodcamera.ui.gallery
 
 import android.app.Application
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
+import android.provider.MediaStore
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.moodcamera.data.model.PhotoEntity
 import com.moodcamera.data.repository.PhotoRepository
-import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.UpscaylUpscaler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +27,8 @@ data class PhotoDetailUiState(
     val isLoading: Boolean = true,
     val isUpscaling: Boolean = false,
     val upscaleProgress: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isSaved: Boolean = false
 )
 
 @HiltViewModel
@@ -62,16 +63,15 @@ class PhotoDetailViewModel @Inject constructor(
         val photo = _uiState.value.photo ?: return
         if (_uiState.value.isUpscaling) return
 
-        _uiState.update { it.copy(isUpscaling = true, upscaleProgress = "Loading image...", errorMessage = null) }
+        _uiState.update { it.copy(isUpscaling = true, upscaleProgress = "Loading image...", errorMessage = null, isSaved = false) }
 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    _uiState.update { it.copy(upscaleProgress = "Upscaling with AI...") }
+                    _uiState.update { it.copy(upscaleProgress = "Enhancing with AI...") }
 
                     val options = BitmapFactory.Options().apply {
                         inPreferredConfig = Bitmap.Config.ARGB_8888
-                        inSampleSize = 2
                     }
                     val bitmap = BitmapFactory.decodeFile(photo.filePath, options)
                         ?: throw Exception("Failed to load image")
@@ -83,7 +83,7 @@ class PhotoDetailViewModel @Inject constructor(
                         _uiState.update { it.copy(upscaleProgress = "Saving...") }
 
                         val outputFile = photoRepository.createPhotoFile()
-                        outputFile.outputStream(). use { fos ->
+                        outputFile.outputStream().use { fos ->
                             upscaled.compress(Bitmap.CompressFormat.JPEG, 95, fos)
                         }
                         val w = upscaled.width
@@ -119,6 +119,38 @@ class PhotoDetailViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    fun saveToGallery() {
+        val photo = _uiState.value.photo ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val context = application
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, "MoodSnap_${System.currentTimeMillis()}.jpg")
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MoodSnap")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                    uri?.let {
+                        resolver.openOutputStream(it)?.use { stream ->
+                            val bitmap = BitmapFactory.decodeFile(photo.filePath)
+                            bitmap?.compress(Bitmap.CompressFormat.JPEG, 98, stream)
+                            bitmap?.recycle()
+                        }
+                        contentValues.clear()
+                        contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(it, contentValues, null, null)
+                    }
+                } catch (_: Exception) {}
+            }
+            _uiState.update { it.copy(isSaved = true) }
+            kotlinx.coroutines.delay(2000)
+            _uiState.update { it.copy(isSaved = false) }
         }
     }
 

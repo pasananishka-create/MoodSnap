@@ -140,7 +140,11 @@ fun CameraScreen(
                 val bmp = withContext(Dispatchers.Main) {
                     previewView.bitmap?.let {
                         if (it.width > 0 && it.height > 0) {
-                            Bitmap.createScaledBitmap(it, 320, 240, true)
+                            val maxDim = 320
+                            val scale = maxDim.toFloat() / maxOf(it.width, it.height)
+                            val tw = (it.width * scale).toInt().coerceAtLeast(1)
+                            val th = (it.height * scale).toInt().coerceAtLeast(1)
+                            Bitmap.createScaledBitmap(it, tw, th, true)
                         } else null
                     }
                 }
