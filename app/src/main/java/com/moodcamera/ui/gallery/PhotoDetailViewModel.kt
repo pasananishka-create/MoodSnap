@@ -44,7 +44,9 @@ class PhotoDetailViewModel @Inject constructor(
     val uiState: StateFlow<PhotoDetailUiState> = _uiState.asStateFlow()
 
     init {
-        UpscaylUpscaler.init(application)
+        viewModelScope.launch(Dispatchers.IO) {
+            UpscaylUpscaler.init(application)
+        }
         if (photoId > 0) {
             loadPhoto()
         }
@@ -67,6 +69,11 @@ class PhotoDetailViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
+                if (!UpscaylUpscaler.isReady()) {
+                    _uiState.update { it.copy(upscaleProgress = "Downloading AI model (64MB)...") }
+                    UpscaylUpscaler.init(application)
+                }
+
                 val result = withContext(Dispatchers.IO) {
                     _uiState.update { it.copy(upscaleProgress = "Enhancing with AI...") }
 

@@ -145,7 +145,7 @@ fun CameraScreen(
                     previewView.bitmap
                 }
                 if (rawBmp != null && rawBmp.width > 0 && rawBmp.height > 0) {
-                    val maxDim = 320
+                    val maxDim = 540
                     val scale = maxDim.toFloat() / maxOf(rawBmp.width, rawBmp.height)
                     val tw = (rawBmp.width * scale).toInt().coerceAtLeast(1)
                     val th = (rawBmp.height * scale).toInt().coerceAtLeast(1)

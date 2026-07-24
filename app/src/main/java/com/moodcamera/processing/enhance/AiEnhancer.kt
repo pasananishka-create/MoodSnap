@@ -30,7 +30,7 @@ object AiEnhancer {
         return src
     }
 
-    fun upscaleTo4K(bitmap: Bitmap): Bitmap {
+    suspend fun upscaleTo4K(bitmap: Bitmap): Bitmap {
         return UpscaylUpscaler.upscale(bitmap)
     }
 

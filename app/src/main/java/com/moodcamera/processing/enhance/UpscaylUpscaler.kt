@@ -10,6 +10,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URL
 import java.nio.FloatBuffer
@@ -28,23 +30,29 @@ object UpscaylUpscaler {
     private var session: OrtSession? = null
     private var ortEnv: OrtEnvironment? = null
     private var initFailed = false
+    private var initStarted = false
 
-    fun init(context: Context) {
-        if (session != null || initFailed) return
+    val isDownloading: Boolean get() = initStarted && session == null && !initFailed
+
+    suspend fun init(context: Context) {
+        if (session != null || initFailed || initStarted) return
+        initStarted = true
         try {
             val modelFile = File(context.filesDir, MODEL_FILENAME)
             if (!modelFile.exists()) {
                 Log.i("UpscaylUpscaler", "Downloading AI model (~64MB)...")
-                URL(MODEL_URL).openStream().use { input ->
-                    modelFile.outputStream().use { output ->
-                        input.copyTo(output)
+                withContext(Dispatchers.IO) {
+                    URL(MODEL_URL).openStream().use { input ->
+                        modelFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
                     }
                 }
                 Log.i("UpscaylUpscaler", "Model downloaded: ${modelFile.length()} bytes")
             }
 
+            val modelBytes = withContext(Dispatchers.IO) { modelFile.readBytes() }
             ortEnv = OrtEnvironment.getEnvironment()
-            val modelBytes = modelFile.readBytes()
             val options = OrtSession.SessionOptions().apply {
                 try { addNnapi() } catch (_: Exception) {}
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -63,14 +71,15 @@ object UpscaylUpscaler {
         try { ortEnv?.close() } catch (_: Exception) {}
         session = null
         ortEnv = null
+        initStarted = false
     }
 
     fun isReady(): Boolean = session != null
 
-    fun upscale(bitmap: Bitmap): Bitmap {
+    suspend fun upscale(bitmap: Bitmap): Bitmap {
         val sess = session
         val env = ortEnv
-        if (sess == null || env == null) return algorithmicUpscale(bitmap)
+        if (sess == null || env == null) return withContext(Dispatchers.IO) { algorithmicUpscale(bitmap) }
 
         val w = bitmap.width
         val h = bitmap.height
@@ -94,46 +103,48 @@ object UpscaylUpscaler {
             Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {
             if (src !== bitmap) src.recycle()
-            return algorithmicUpscale(bitmap)
+            return withContext(Dispatchers.IO) { algorithmicUpscale(bitmap) }
         }
 
         val resultCanvas = Canvas(result)
         val tileOverlap = 4
         val step = TILE_SIZE - tileOverlap * 2
 
-        var ty = 0
-        while (ty < sh) {
-            var tx = 0
-            while (tx < sw) {
-                val tileW = min(TILE_SIZE, sw - tx)
-                val tileH = min(TILE_SIZE, sh - ty)
-                if (tileW < 8 || tileH < 8) { tx += step; continue }
+        withContext(Dispatchers.IO) {
+            var ty = 0
+            while (ty < sh) {
+                var tx = 0
+                while (tx < sw) {
+                    val tileW = min(TILE_SIZE, sw - tx)
+                    val tileH = min(TILE_SIZE, sh - ty)
+                    if (tileW < 8 || tileH < 8) { tx += step; continue }
 
-                try {
-                    val tileBitmap = Bitmap.createBitmap(src, tx, ty, tileW, tileH)
-                    val upscaled = runInference(sess, env, tileBitmap)
-                    tileBitmap.recycle()
+                    try {
+                        val tileBitmap = Bitmap.createBitmap(src, tx, ty, tileW, tileH)
+                        val upscaled = runInference(sess, env, tileBitmap)
+                        tileBitmap.recycle()
 
-                    if (upscaled != null) {
-                        val dstX = tx * SCALE
-                        val dstY = ty * SCALE
-                        val oX = tileOverlap * SCALE
-                        val oY = tileOverlap * SCALE
-                        val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
-                        val dstRect = Rect(dstX + oX, dstY + oY,
-                            dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY)
-                        if (srcRect.width() > 0 && srcRect.height() > 0 &&
-                            dstRect.width() > 0 && dstRect.height() > 0) {
-                            resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
+                        if (upscaled != null) {
+                            val dstX = tx * SCALE
+                            val dstY = ty * SCALE
+                            val oX = tileOverlap * SCALE
+                            val oY = tileOverlap * SCALE
+                            val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
+                            val dstRect = Rect(dstX + oX, dstY + oY,
+                                dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY)
+                            if (srcRect.width() > 0 && srcRect.height() > 0 &&
+                                dstRect.width() > 0 && dstRect.height() > 0) {
+                                resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
+                            }
+                            upscaled.recycle()
                         }
-                        upscaled.recycle()
+                    } catch (e: Exception) {
+                        Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
+                    tx += step
                 }
-                tx += step
+                ty += step
             }
-            ty += step
         }
 
         if (src !== bitmap) src.recycle()
