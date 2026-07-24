@@ -65,6 +65,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
@@ -129,6 +130,9 @@ fun CameraScreen(
 
     var livePreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
+    val previewCanvas = remember { android.graphics.Canvas() }
+    val previewPaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
+
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
         viewModel.startCamera(lifecycleOwner, previewView)
     }
@@ -137,18 +141,19 @@ fun CameraScreen(
         kotlinx.coroutines.delay(1000)
         while (true) {
             try {
-                val bmp = withContext(Dispatchers.Main) {
-                    previewView.bitmap?.let {
-                        if (it.width > 0 && it.height > 0) {
-                            val maxDim = 400
-                            val scale = maxDim.toFloat() / maxOf(it.width, it.height)
-                            val tw = (it.width * scale).toInt().coerceAtLeast(1)
-                            val th = (it.height * scale).toInt().coerceAtLeast(1)
-                            Bitmap.createScaledBitmap(it, tw, th, true)
-                        } else null
-                    }
+                val rawBmp = withContext(Dispatchers.Main) {
+                    previewView.bitmap
                 }
-                if (bmp != null) {
+                if (rawBmp != null && rawBmp.width > 0 && rawBmp.height > 0) {
+                    val maxDim = 400
+                    val scale = maxDim.toFloat() / maxOf(rawBmp.width, rawBmp.height)
+                    val tw = (rawBmp.width * scale).toInt().coerceAtLeast(1)
+                    val th = (rawBmp.height * scale).toInt().coerceAtLeast(1)
+
+                    val bmp = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+                    previewCanvas.setBitmap(bmp)
+                    previewCanvas.drawBitmap(rawBmp, null, android.graphics.Rect(0, 0, tw, th), previewPaint)
+
                     val settingsSnapshot = uiState.settings
                     val processed = withContext(Dispatchers.Default) {
                         PreviewProcessor.processPreview(bmp, settingsSnapshot)
@@ -177,6 +182,7 @@ fun CameraScreen(
             factory = { previewView },
             modifier = Modifier
                 .fillMaxSize()
+                .alpha(if (uiState.settings.emulationType == EmulationType.ORIGINAL) 1f else 0f)
                 .pointerInput(Unit) {
                     detectTransformGestures { _, _, zoom, _ ->
                         pinchZoom = (pinchZoom * zoom).coerceIn(0.5f, 10f)
