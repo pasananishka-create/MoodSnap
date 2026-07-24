@@ -17,8 +17,8 @@ object UpscaylUpscaler {
 
     private const val MODEL_FILE = "realesr-animevideov3-x4.onnx"
     private const val SCALE = 4
-    private const val TILE_SIZE = 128
-    private const val MAX_INPUT_DIM = 1024
+    private const val TILE_SIZE = 64
+    private const val MAX_INPUT_DIM = 512
 
     private var session: OrtSession? = null
     private var env: OrtEnvironment? = null
@@ -51,13 +51,15 @@ object UpscaylUpscaler {
         val w = bitmap.width
         val h = bitmap.height
 
-        if (w < 4 || h < 4) return bitmap
+        if (w < 8 || h < 8) return bitmap
 
         val scaled = if (w > MAX_INPUT_DIM || h > MAX_INPUT_DIM) {
             val ratio = MAX_INPUT_DIM.toFloat() / maxOf(w, h)
-            Bitmap.createScaledBitmap(bitmap, (w * ratio).roundToInt(), (h * ratio).roundToInt(), true)
+            val nw = (w * ratio).roundToInt().coerceAtLeast(8)
+            val nh = (h * ratio).roundToInt().coerceAtLeast(8)
+            Bitmap.createScaledBitmap(bitmap, nw, nh, true)
         } else {
-            bitmap
+            bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return bitmap
         }
 
         val iw = scaled.width
@@ -65,10 +67,18 @@ object UpscaylUpscaler {
 
         val outW = iw * SCALE
         val outH = ih * SCALE
-        val result = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
-        val resultCanvas = Canvas(result)
 
-        val tileOverlap = 8
+        val result = try {
+            Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e("UpscaylUpscaler", "OOM creating output: ${e.message}")
+            scaled.recycle()
+            return bitmap
+        }
+
+        val resultCanvas = Canvas(result)
+        val tileOverlap = 4
+        val step = TILE_SIZE - tileOverlap * 2
 
         var ty = 0
         while (ty < ih) {
@@ -77,30 +87,40 @@ object UpscaylUpscaler {
                 val tileW = min(TILE_SIZE, iw - tx)
                 val tileH = min(TILE_SIZE, ih - ty)
 
-                val tileBitmap = Bitmap.createBitmap(scaled, tx, ty, tileW, tileH)
-                val upscaled = runInference(sess, ortEnv, tileBitmap)
-
-                if (upscaled != null) {
-                    val dstX = tx * SCALE
-                    val dstY = ty * SCALE
-                    val srcRect = Rect(tileOverlap, tileOverlap,
-                        upscaled.width - tileOverlap, upscaled.height - tileOverlap)
-                    val dstRect = Rect(dstX + tileOverlap * SCALE, dstY + tileOverlap * SCALE,
-                        dstX + tileW * SCALE - tileOverlap * SCALE, dstY + tileH * SCALE - tileOverlap * SCALE)
-
-                    if (srcRect.width() > 0 && srcRect.height() > 0 &&
-                        dstRect.width() > 0 && dstRect.height() > 0) {
-                        resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
-                    }
-                    upscaled.recycle()
+                if (tileW < 8 || tileH < 8) {
+                    tx += step; continue
                 }
-                tileBitmap.recycle()
-                tx += TILE_SIZE - tileOverlap * 2
+
+                try {
+                    val tileBitmap = Bitmap.createBitmap(scaled, tx, ty, tileW, tileH)
+                    val upscaled = runInference(sess, ortEnv, tileBitmap)
+                    tileBitmap.recycle()
+
+                    if (upscaled != null) {
+                        val dstX = tx * SCALE
+                        val dstY = ty * SCALE
+                        val oX = tileOverlap * SCALE
+                        val oY = tileOverlap * SCALE
+                        val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
+                        val dstRect = Rect(dstX + oX, dstY + oY,
+                            dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY)
+
+                        if (srcRect.width() > 0 && srcRect.height() > 0 &&
+                            dstRect.width() > 0 && dstRect.height() > 0) {
+                            resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
+                        }
+                        upscaled.recycle()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
+                }
+
+                tx += step
             }
-            ty += TILE_SIZE - tileOverlap * 2
+            ty += step
         }
 
-        if (scaled !== bitmap) scaled.recycle()
+        scaled.recycle()
         return result
     }
 

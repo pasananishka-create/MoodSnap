@@ -134,22 +134,28 @@ fun CameraScreen(
     }
 
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
-        kotlinx.coroutines.delay(800)
+        kotlinx.coroutines.delay(1000)
         while (true) {
             try {
-                val bmp = previewView.bitmap
-                if (bmp != null && bmp.width > 0 && bmp.height > 0) {
-                    val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
-                    val processed = withContext(Dispatchers.Default) {
-                        PreviewProcessor.processPreview(src, uiState.settings)
+                val bmp = withContext(Dispatchers.Main) {
+                    previewView.bitmap?.let {
+                        if (it.width > 0 && it.height > 0) {
+                            Bitmap.createScaledBitmap(it, 320, 240, true)
+                        } else null
                     }
-                    src.recycle()
+                }
+                if (bmp != null) {
+                    val settingsSnapshot = uiState.settings
+                    val processed = withContext(Dispatchers.Default) {
+                        PreviewProcessor.processPreview(bmp, settingsSnapshot)
+                    }
+                    bmp.recycle()
                     val old = livePreviewBitmap
                     livePreviewBitmap = processed
                     if (old != null && old !== processed) old.recycle()
                 }
             } catch (_: Exception) {}
-            kotlinx.coroutines.delay(120)
+            kotlinx.coroutines.delay(150)
         }
     }
 

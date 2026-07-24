@@ -145,6 +145,18 @@ fun PhotoDetailScreen(
             }
         }
 
+        uiState.errorMessage?.let { error ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFCF6679).copy(alpha = 0.15f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(error, color = Color(0xFFCF6679), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+
         uiState.photo?.let { photo ->
             Box(
                 modifier = Modifier

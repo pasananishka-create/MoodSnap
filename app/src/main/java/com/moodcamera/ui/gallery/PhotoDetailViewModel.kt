@@ -26,7 +26,8 @@ data class PhotoDetailUiState(
     val photo: PhotoEntity? = null,
     val isLoading: Boolean = true,
     val isUpscaling: Boolean = false,
-    val upscaleProgress: String? = null
+    val upscaleProgress: String? = null,
+    val errorMessage: String? = null
 )
 
 @HiltViewModel
@@ -61,34 +62,45 @@ class PhotoDetailViewModel @Inject constructor(
         val photo = _uiState.value.photo ?: return
         if (_uiState.value.isUpscaling) return
 
-        _uiState.update { it.copy(isUpscaling = true, upscaleProgress = "Loading image...") }
+        _uiState.update { it.copy(isUpscaling = true, upscaleProgress = "Loading image...", errorMessage = null) }
 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     _uiState.update { it.copy(upscaleProgress = "Upscaling with AI...") }
 
-                    val bitmap = BitmapFactory.decodeFile(photo.filePath)
+                    val options = BitmapFactory.Options().apply {
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                        inSampleSize = 2
+                    }
+                    val bitmap = BitmapFactory.decodeFile(photo.filePath, options)
                         ?: throw Exception("Failed to load image")
 
-                    val upscaled = UpscaylUpscaler.upscale(bitmap)
-                    bitmap.recycle()
+                    try {
+                        val upscaled = UpscaylUpscaler.upscale(bitmap)
+                        bitmap.recycle()
 
-                    _uiState.update { it.copy(upscaleProgress = "Saving...") }
+                        _uiState.update { it.copy(upscaleProgress = "Saving...") }
 
-                    val outputFile = photoRepository.createPhotoFile()
-                    outputFile.outputStream().use { fos ->
-                        upscaled.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                        val outputFile = photoRepository.createPhotoFile()
+                        outputFile.outputStream(). use { fos ->
+                            upscaled.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                        }
+                        val w = upscaled.width
+                        val h = upscaled.height
+                        upscaled.recycle()
+
+                        val updatedEntity = photo.copy(
+                            filePath = outputFile.absolutePath,
+                            width = w,
+                            height = h
+                        )
+                        photoRepository.updatePhoto(updatedEntity)
+                        updatedEntity
+                    } catch (e: OutOfMemoryError) {
+                        bitmap.recycle()
+                        throw Exception("Not enough memory to upscale")
                     }
-                    upscaled.recycle()
-
-                    val updatedEntity = photo.copy(
-                        filePath = outputFile.absolutePath,
-                        width = 0,
-                        height = 0
-                    )
-                    photoRepository.updatePhoto(updatedEntity)
-                    updatedEntity
                 }
 
                 _uiState.update {
@@ -102,7 +114,8 @@ class PhotoDetailViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isUpscaling = false,
-                        upscaleProgress = null
+                        upscaleProgress = null,
+                        errorMessage = e.message ?: "Upscale failed"
                     )
                 }
             }
