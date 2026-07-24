@@ -12,7 +12,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class PresetsUiState(
-    val selectedEmulation: EmulationType = EmulationType.PORTRA
+    val selectedEmulation: EmulationType = EmulationType.ORIGINAL
 )
 
 @HiltViewModel

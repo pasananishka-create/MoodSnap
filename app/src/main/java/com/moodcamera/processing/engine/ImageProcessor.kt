@@ -130,6 +130,8 @@ object ImageProcessor {
             val b = Color.blue(px) / 255f
 
             val (nr, ng, nb) = when (type) {
+                // Original
+                EmulationType.ORIGINAL -> Triple(r, g, b)
                 // Instagram
                 EmulationType.CLARENDON -> clarendon(r, g, b)
                 EmulationType.JUNO -> juno(r, g, b)

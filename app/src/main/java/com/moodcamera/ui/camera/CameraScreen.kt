@@ -58,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -186,13 +187,15 @@ fun CameraScreen(
         )
 
         livePreviewBitmap?.let { bitmap ->
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                alpha = 1f
-            )
+            key(bitmap) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    alpha = 1f
+                )
+            }
         }
 
         if (uiState.settings.isGridEnabled) {
@@ -279,8 +282,8 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 ToolButton(
-                    label = uiState.settings.emulationType.displayName,
-                    isActive = uiState.settings.emulationType != EmulationType.PORTRA,
+                    label = if (uiState.settings.emulationType == EmulationType.ORIGINAL) "No Filter" else uiState.settings.emulationType.displayName,
+                    isActive = uiState.settings.emulationType != EmulationType.ORIGINAL,
                     onClick = {
                         showFilterBar = !showFilterBar
                         showAdjustPanel = false
@@ -699,7 +702,11 @@ private fun FilterBar(
 ) {
     val categories = EmulationCategory.entries
     var selectedCategory by remember { mutableStateOf(currentEmulation.category) }
-    val categoryFilters = EmulationType.entries.filter { it.category == selectedCategory }
+    val categoryFilters = if (selectedCategory == EmulationCategory.ALL) {
+        EmulationType.entries.toList()
+    } else {
+        listOf(EmulationType.ORIGINAL) + EmulationType.entries.filter { it.category == selectedCategory && it != EmulationType.ORIGINAL }
+    }
     val listState = rememberLazyListState()
 
     Column(
@@ -1008,6 +1015,7 @@ private fun Toast(message: String, icon: String = "", tint: Color = MoodAccent, 
 }
 
 private fun EmulationType.previewColor(): Color = when (this) {
+    EmulationType.ORIGINAL -> Color(0xFFCCCCCC)
     EmulationType.CLARENDON -> Color(0xFF4499DD)
     EmulationType.JUNO -> Color(0xFFFFAA33)
     EmulationType.LARK -> Color(0xFF88CCBB)

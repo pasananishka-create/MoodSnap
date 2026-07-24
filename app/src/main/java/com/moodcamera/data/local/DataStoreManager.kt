@@ -42,8 +42,8 @@ class DataStoreManager @Inject constructor(
     val cameraSettingsFlow: Flow<CameraSettings> = context.dataStore.data.map { prefs ->
         CameraSettings(
             emulationType = try {
-                EmulationType.valueOf(prefs[Keys.EMULATION_TYPE] ?: "PORTRA")
-            } catch (_: Exception) { EmulationType.PORTRA },
+                EmulationType.valueOf(prefs[Keys.EMULATION_TYPE] ?: "ORIGINAL")
+            } catch (_: Exception) { EmulationType.ORIGINAL },
             toneType = try {
                 ToneType.valueOf(prefs[Keys.TONE_TYPE] ?: "NEUTRAL")
             } catch (_: Exception) { ToneType.NEUTRAL },

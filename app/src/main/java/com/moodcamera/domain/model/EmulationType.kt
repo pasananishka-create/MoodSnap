@@ -5,6 +5,11 @@ enum class EmulationType(
     val description: String,
     val category: EmulationCategory
 ) {
+    ORIGINAL(
+        displayName = "Original",
+        description = "No filter, natural look",
+        category = EmulationCategory.ALL
+    ),
     CLARENDON(
         displayName = "Clarendon",
         description = "Vivid, high contrast, cool shadows",
@@ -208,6 +213,7 @@ enum class EmulationType(
 }
 
 enum class EmulationCategory(val label: String) {
+    ALL("All"),
     FILMIC("Film"),
     NATURAL("Natural"),
     CINEMATIC("Cinema"),

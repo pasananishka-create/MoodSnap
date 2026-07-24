@@ -30,6 +30,7 @@ object PreviewProcessor {
             var b = Color.blue(px) / 255f
 
             val (nr, ng, nb) = when (settings.emulationType) {
+                EmulationType.ORIGINAL -> Triple(r, g, b)
                 EmulationType.CLARENDON -> quickClarendon(r, g, b)
                 EmulationType.JUNO -> quickJuno(r, g, b)
                 EmulationType.LARK -> quickLark(r, g, b)

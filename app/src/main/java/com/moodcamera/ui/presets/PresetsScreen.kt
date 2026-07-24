@@ -85,6 +85,18 @@ fun PresetsScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize()
         ) {
+            // Original
+            item {
+                CategoryHeader("Original")
+            }
+            items(listOf(EmulationType.ORIGINAL)) { type ->
+                EmulationItem(
+                    emulationType = type,
+                    isSelected = type == uiState.selectedEmulation,
+                    onClick = { viewModel.selectEmulation(type) }
+                )
+            }
+
             // Filmic category
             item {
                 CategoryHeader("Filmic")

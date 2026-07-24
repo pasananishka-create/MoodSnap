@@ -21,7 +21,7 @@ enum class TimerDuration(val displayName: String, val seconds: Int) {
 }
 
 data class CameraSettings(
-    val emulationType: EmulationType = EmulationType.PORTRA,
+    val emulationType: EmulationType = EmulationType.ORIGINAL,
     val toneType: ToneType = ToneType.NEUTRAL,
     val qualityType: QualityType = QualityType.ISO_200,
     val aspectRatio: AspectRatio = AspectRatio.FOUR_THREE,
