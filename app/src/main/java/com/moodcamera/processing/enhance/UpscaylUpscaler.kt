@@ -9,6 +9,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.util.Log
+import java.io.File
+import java.net.URL
 import java.nio.FloatBuffer
 import java.util.Collections
 import kotlin.math.min
@@ -16,47 +19,58 @@ import kotlin.math.roundToInt
 
 object UpscaylUpscaler {
 
-    private const val MODEL_FILE = "realesrgan-x4.onnx"
+    private const val MODEL_URL = "https://huggingface.co/AXERA-TECH/Real-ESRGAN/resolve/main/onnx/realesrgan-x4.onnx"
+    private const val MODEL_FILENAME = "realesrgan-x4.onnx"
     private const val SCALE = 4
     private const val TILE_SIZE = 128
     private const val MAX_INPUT_DIM = 512
 
     private var session: OrtSession? = null
-    private var env: OrtEnvironment? = null
+    private var ortEnv: OrtEnvironment? = null
+    private var initFailed = false
 
     fun init(context: Context) {
-        if (session != null) return
+        if (session != null || initFailed) return
         try {
-            env = OrtEnvironment.getEnvironment()
-            val modelBytes = context.assets.open(MODEL_FILE).use { it.readBytes() }
-            val options = OrtSession.SessionOptions().apply {
-                try {
-                    addNnapi()
-                } catch (_: Exception) {
-                    // NNAPI not available, fall back to CPU
+            val modelFile = File(context.filesDir, MODEL_FILENAME)
+            if (!modelFile.exists()) {
+                Log.i("UpscaylUpscaler", "Downloading AI model (~64MB)...")
+                URL(MODEL_URL).openStream().use { input ->
+                    modelFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
+                Log.i("UpscaylUpscaler", "Model downloaded: ${modelFile.length()} bytes")
+            }
+
+            ortEnv = OrtEnvironment.getEnvironment()
+            val modelBytes = modelFile.readBytes()
+            val options = OrtSession.SessionOptions().apply {
+                try { addNnapi() } catch (_: Exception) {}
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             }
-            session = env!!.createSession(modelBytes, options)
-            android.util.Log.i("UpscaylUpscaler", "Model loaded successfully")
+            session = ortEnv!!.createSession(modelBytes, options)
+            Log.i("UpscaylUpscaler", "AI model loaded successfully")
         } catch (e: Exception) {
-            android.util.Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
+            Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
             session = null
+            initFailed = true
         }
     }
 
     fun close() {
         try { session?.close() } catch (_: Exception) {}
-        try { env?.close() } catch (_: Exception) {}
+        try { ortEnv?.close() } catch (_: Exception) {}
         session = null
-        env = null
+        ortEnv = null
     }
 
     fun isReady(): Boolean = session != null
 
     fun upscale(bitmap: Bitmap): Bitmap {
-        val sess = session ?: return algorithmicUpscale(bitmap)
-        val ortEnv = env ?: return algorithmicUpscale(bitmap)
+        val sess = session
+        val env = ortEnv
+        if (sess == null || env == null) return algorithmicUpscale(bitmap)
 
         val w = bitmap.width
         val h = bitmap.height
@@ -79,7 +93,6 @@ object UpscaylUpscaler {
         val result = try {
             Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {
-            android.util.Log.e("UpscaylUpscaler", "OOM creating output")
             if (src !== bitmap) src.recycle()
             return algorithmicUpscale(bitmap)
         }
@@ -94,12 +107,11 @@ object UpscaylUpscaler {
             while (tx < sw) {
                 val tileW = min(TILE_SIZE, sw - tx)
                 val tileH = min(TILE_SIZE, sh - ty)
-
                 if (tileW < 8 || tileH < 8) { tx += step; continue }
 
                 try {
                     val tileBitmap = Bitmap.createBitmap(src, tx, ty, tileW, tileH)
-                    val upscaled = runInference(sess, ortEnv, tileBitmap)
+                    val upscaled = runInference(sess, env, tileBitmap)
                     tileBitmap.recycle()
 
                     if (upscaled != null) {
@@ -108,21 +120,17 @@ object UpscaylUpscaler {
                         val oX = tileOverlap * SCALE
                         val oY = tileOverlap * SCALE
                         val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
-                        val dstRect = Rect(
-                            dstX + oX, dstY + oY,
-                            dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY
-                        )
+                        val dstRect = Rect(dstX + oX, dstY + oY,
+                            dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY)
                         if (srcRect.width() > 0 && srcRect.height() > 0 &&
-                            dstRect.width() > 0 && dstRect.height() > 0
-                        ) {
+                            dstRect.width() > 0 && dstRect.height() > 0) {
                             resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
                         }
                         upscaled.recycle()
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
+                    Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
                 }
-
                 tx += step
             }
             ty += step
@@ -132,7 +140,7 @@ object UpscaylUpscaler {
         return result
     }
 
-    private fun runInference(sess: OrtSession, ortEnv: OrtEnvironment, tile: Bitmap): Bitmap? {
+    private fun runInference(sess: OrtSession, env: OrtEnvironment, tile: Bitmap): Bitmap? {
         return try {
             val w = tile.width
             val h = tile.height
@@ -148,7 +156,7 @@ object UpscaylUpscaler {
             }
 
             val shape = longArrayOf(1, 3, h.toLong(), w.toLong())
-            val inputTensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(floatArray), shape)
+            val inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArray), shape)
             val inputName = sess.inputNames.first()
             val results = sess.run(Collections.singletonMap(inputName, inputTensor))
 
@@ -173,7 +181,7 @@ object UpscaylUpscaler {
             results.close()
             outBitmap
         } catch (e: Exception) {
-            android.util.Log.e("UpscaylUpscaler", "Inference failed: ${e.message}", e)
+            Log.e("UpscaylUpscaler", "Inference failed: ${e.message}", e)
             null
         }
     }
