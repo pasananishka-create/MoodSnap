@@ -13,9 +13,8 @@ object PreviewProcessor {
     fun processPreview(bitmap: Bitmap, settings: CameraSettings): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
-        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val pixels = IntArray(w * h)
-        result.getPixels(pixels, 0, w, 0, 0, w, h)
+        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
 
         val fade = settings.fade
         val contrast = settings.contrast
@@ -122,8 +121,8 @@ object PreviewProcessor {
             )
         }
 
-        result.setPixels(pixels, 0, w, 0, 0, w, h)
-        return result
+        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        return bitmap
     }
 
     private fun clamp(x: Float) = x.coerceIn(0f, 1f)

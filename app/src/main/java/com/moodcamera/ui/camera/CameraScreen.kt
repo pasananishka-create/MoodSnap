@@ -140,7 +140,7 @@ fun CameraScreen(
                 val bmp = withContext(Dispatchers.Main) {
                     previewView.bitmap?.let {
                         if (it.width > 0 && it.height > 0) {
-                            val maxDim = 640
+                            val maxDim = 400
                             val scale = maxDim.toFloat() / maxOf(it.width, it.height)
                             val tw = (it.width * scale).toInt().coerceAtLeast(1)
                             val th = (it.height * scale).toInt().coerceAtLeast(1)
@@ -153,7 +153,6 @@ fun CameraScreen(
                     val processed = withContext(Dispatchers.Default) {
                         PreviewProcessor.processPreview(bmp, settingsSnapshot)
                     }
-                    bmp.recycle()
                     val old = livePreviewBitmap
                     livePreviewBitmap = processed
                     if (old != null && old !== processed) old.recycle()

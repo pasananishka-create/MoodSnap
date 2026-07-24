@@ -5,11 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 object UpscaylUpscaler {
 
-    private const val SCALE = 2
+    private const val MAX_OUTPUT_DIM = 4000
 
     fun init(context: Context) {}
 
@@ -22,13 +24,24 @@ object UpscaylUpscaler {
         val h = bitmap.height
         if (w < 8 || h < 8) return bitmap
 
-        val outW = w * SCALE
-        val outH = h * SCALE
+        val longest = maxOf(w, h)
+        val scale = if (longest < MAX_OUTPUT_DIM) {
+            min(2f, MAX_OUTPUT_DIM.toFloat() / longest)
+        } else {
+            1f
+        }
+
+        if (scale <= 1.01f) {
+            return sharpenInStrips(bitmap)
+        }
+
+        val outW = (w * scale).roundToInt()
+        val outH = (h * scale).roundToInt()
 
         val upscaled = try {
             Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {
-            return bitmap
+            return sharpenInStrips(bitmap)
         }
 
         val canvas = Canvas(upscaled)
@@ -36,71 +49,59 @@ object UpscaylUpscaler {
             isFilterBitmap = true
             isDither = true
         }
-        canvas.drawBitmap(bitmap, null, android.graphics.Rect(0, 0, outW, outH), paint)
+        canvas.drawBitmap(bitmap, null, Rect(0, 0, outW, outH), paint)
 
-        return sharpen(upscaled)
+        return sharpenInStrips(upscaled)
     }
 
-    private fun sharpen(bitmap: Bitmap): Bitmap {
+    private fun sharpenInStrips(bitmap: Bitmap): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
         if (w < 3 || h < 3) return bitmap
 
-        val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        val out = IntArray(pixels.size)
+        val stripH = 64
+        val srcPixels = IntArray(w * stripH)
+        val outPixels = IntArray(w * stripH)
 
-        for (y in 1 until h - 1) {
-            for (x in 1 until w - 1) {
-                val idx = y * w + x
-                val c = pixels[idx]
-                val l = pixels[idx - 1]
-                val r = pixels[idx + 1]
-                val u = pixels[idx - w]
-                val d = pixels[idx + w]
+        var y = 1
+        while (y < h - 1) {
+            val yEnd = min(y + stripH, h - 1)
+            val rows = yEnd - y
 
-                val cr = Color.red(c).toFloat()
-                val cg = Color.green(c).toFloat()
-                val cb = Color.blue(c).toFloat()
+            val topY = maxOf(y - 1, 0)
+            val readH = rows + 2
+            val readPixels = IntArray(w * readH)
+            bitmap.getPixels(readPixels, 0, w, 0, topY, w, readH)
 
-                val lr = Color.red(l).toFloat()
-                val lg = Color.green(l).toFloat()
-                val lb = Color.blue(l).toFloat()
+            for (row in 0 until rows) {
+                val ry = row + 1
+                outPixels[row * w] = readPixels[ry * w]
+                outPixels[row * w + w - 1] = readPixels[ry * w + w - 1]
 
-                val rr = Color.red(r).toFloat()
-                val rg = Color.green(r).toFloat()
-                val rb = Color.blue(r).toFloat()
+                for (x in 1 until w - 1) {
+                    val idx = ry * w + x
+                    val c = readPixels[idx]
+                    val l = readPixels[idx - 1]
+                    val r = readPixels[idx + 1]
+                    val u = readPixels[idx - w]
+                    val d = readPixels[idx + w]
 
-                val ur = Color.red(u).toFloat()
-                val ug = Color.green(u).toFloat()
-                val ub = Color.blue(u).toFloat()
+                    val cr = Color.red(c)
+                    val cg = Color.green(c)
+                    val cb = Color.blue(c)
 
-                val dr = Color.red(d).toFloat()
-                val dg = Color.green(d).toFloat()
-                val db = Color.blue(d).toFloat()
+                    val nr = ((cr * 2f - (Color.red(l) + Color.red(r) + Color.red(u) + Color.red(d)) * 0.25f).roundToInt()).coerceIn(0, 255)
+                    val ng = ((cg * 2f - (Color.green(l) + Color.green(r) + Color.green(u) + Color.green(d)) * 0.25f).roundToInt()).coerceIn(0, 255)
+                    val nb = ((cb * 2f - (Color.blue(l) + Color.blue(r) + Color.blue(u) + Color.blue(d)) * 0.25f).roundToInt()).coerceIn(0, 255)
 
-                val nr = (cr * 2f - (lr + rr + ur + dr) * 0.25f).roundToInt().coerceIn(0, 255)
-                val ng = (cg * 2f - (lg + rg + ug + dg) * 0.25f).roundToInt().coerceIn(0, 255)
-                val nb = (cb * 2f - (lb + rb + ub + db) * 0.25f).roundToInt().coerceIn(0, 255)
-
-                out[idx] = Color.rgb(nr, ng, nb)
+                    outPixels[row * w + x] = Color.rgb(nr, ng, nb)
+                }
             }
+
+            bitmap.setPixels(outPixels, 0, w, 0, y, w, rows)
+            y = yEnd
         }
 
-        out[0] = pixels[0]
-        out[w - 1] = pixels[w - 1]
-        out[(h - 1) * w] = pixels[(h - 1) * w]
-        out[h * w - 1] = pixels[h * w - 1]
-        for (x in 1 until w - 1) {
-            out[x] = pixels[x]
-            out[(h - 1) * w + x] = pixels[(h - 1) * w + x]
-        }
-        for (y in 1 until h - 1) {
-            out[y * w] = pixels[y * w]
-            out[y * w + w - 1] = pixels[y * w + w - 1]
-        }
-
-        bitmap.setPixels(out, 0, w, 0, 0, w, h)
         return bitmap
     }
 }
