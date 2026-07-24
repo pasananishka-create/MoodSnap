@@ -1,20 +1,14 @@
 package com.moodcamera.processing.enhance
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import kotlin.math.min
-import kotlin.math.max
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
-import kotlin.math.PI
 import kotlin.math.sqrt
 
 object AiEnhancer {
-
-    private const val TARGET_4K = 3840
 
     fun enhance(bitmap: Bitmap, intensity: Float = 1f): Bitmap {
         val w = bitmap.width
@@ -37,85 +31,7 @@ object AiEnhancer {
     }
 
     fun upscaleTo4K(bitmap: Bitmap): Bitmap {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w >= TARGET_4K && h >= TARGET_4K) return bitmap
-
-        val newW: Int
-        val newH: Int
-        if (w >= h) {
-            newW = TARGET_4K
-            newH = (h.toFloat() / w * TARGET_4K).roundToInt()
-        } else {
-            newH = TARGET_4K
-            newW = (w.toFloat() / h * TARGET_4K).roundToInt()
-        }
-
-        val srcPixels = IntArray(w * h)
-        bitmap.getPixels(srcPixels, 0, w, 0, 0, w, h)
-
-        val result = Bitmap.createBitmap(newW, newH, Bitmap.Config.ARGB_8888)
-        val tileSize = 512
-        val tilePixels = IntArray(tileSize * tileSize)
-
-        var ty = 0
-        while (ty < newH) {
-            var tx = 0
-            while (tx < newW) {
-                val tw = min(tileSize, newW - tx)
-                val th = min(tileSize, newH - ty)
-
-                for (dy in 0 until th) {
-                    for (dx in 0 until tw) {
-                        val srcX = (tx + dx).toFloat() / newW * w
-                        val srcY = (ty + dy).toFloat() / newH * h
-
-                        var sumR = 0f; var sumG = 0f; var sumB = 0f; var sumW = 0f
-
-                        for (sy in (srcY - 2).toInt()..(srcY + 2).toInt()) {
-                            for (sx in (srcX - 2).toInt()..(srcX + 2).toInt()) {
-                                val px = sx.coerceIn(0, w - 1)
-                                val py = sy.coerceIn(0, h - 1)
-                                val weight = lanczos3(srcX - px) * lanczos3(srcY - py)
-                                if (weight <= 0f) continue
-                                val pixel = srcPixels[py * w + px]
-                                sumR += Color.red(pixel) * weight
-                                sumG += Color.green(pixel) * weight
-                                sumB += Color.blue(pixel) * weight
-                                sumW += weight
-                            }
-                        }
-
-                        tilePixels[dy * tw + dx] = if (sumW > 0f) {
-                            Color.rgb(
-                                (sumR / sumW).roundToInt().coerceIn(0, 255),
-                                (sumG / sumW).roundToInt().coerceIn(0, 255),
-                                (sumB / sumW).roundToInt().coerceIn(0, 255)
-                            )
-                        } else {
-                            srcPixels[srcY.toInt().coerceIn(0, h - 1) * w + srcX.toInt().coerceIn(0, w - 1)]
-                        }
-                    }
-                }
-
-                val tileBitmap = Bitmap.createBitmap(tilePixels, 0, tw, tw, th, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(result)
-                canvas.drawBitmap(tileBitmap, tx.toFloat(), ty.toFloat(), null)
-                tileBitmap.recycle()
-
-                tx += tileSize
-            }
-            ty += tileSize
-        }
-
-        return result
-    }
-
-    private fun lanczos3(x: Float): Float {
-        val ax = abs(x)
-        if (ax >= 3f) return 0f
-        if (ax < 0.0001f) return 1f
-        return (3f * sin(PI.toFloat() * ax) * sin(PI.toFloat() * ax / 3f)) / (PI.toFloat() * PI.toFloat() * ax * ax)
+        return UpscaylUpscaler.upscale(bitmap)
     }
 
     fun isReady(): Boolean = true

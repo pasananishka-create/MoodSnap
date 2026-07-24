@@ -21,7 +21,7 @@ import kotlin.math.sqrt
 
 object ImageProcessor {
 
-    private const val MAX_DIMENSION = 3000
+    private const val MAX_DIMENSION = 2400
 
     fun downscaleIfNeeded(bitmap: Bitmap): Bitmap {
         val w = bitmap.width
@@ -61,7 +61,9 @@ object ImageProcessor {
         src.setPixels(pixels, 0, width, 0, 0, width, height)
 
         var result = src
-        result = applyCombinedMatrix(result, settings.contrast, settings.brightness, settings.temperature, settings.tint)
+        val adjusted = applyCombinedMatrix(result, settings.contrast, settings.brightness, settings.temperature, settings.tint)
+        if (adjusted !== result) result.recycle()
+        result = adjusted
 
         if (settings.isGrainEnabled && quality.grainMultiplier > 0f) {
             val g = FilmGrain.applyGrain(result, quality.grainMultiplier)

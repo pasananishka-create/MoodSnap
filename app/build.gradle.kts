@@ -14,17 +14,26 @@ android {
         applicationId = "com.moodcamera"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "1.4.1"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("${rootProject.projectDir}/release-key.jks")
+            storePassword = "moodsnap2026"
+            keyAlias = "moodsnap"
+            keyPassword = "moodsnap2026"
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
 
@@ -93,6 +102,9 @@ dependencies {
 
     // ExifInterface
     implementation(libs.exifinterface)
+
+    // ONNX Runtime (Upscayl AI upscaling)
+    implementation(libs.onnxruntime.android)
 
     // Coil
     implementation(libs.coil.compose)

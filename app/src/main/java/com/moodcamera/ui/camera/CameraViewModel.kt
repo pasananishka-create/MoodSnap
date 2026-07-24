@@ -35,6 +35,7 @@ import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
+import com.moodcamera.processing.enhance.UpscaylUpscaler
 
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -85,6 +86,7 @@ class CameraViewModel @Inject constructor(
     private var cameraProvider: ProcessCameraProvider? = null
 
     init {
+        UpscaylUpscaler.init(application)
         viewModelScope.launch {
             photoRepository.getPhotoCount().collect { count ->
                 _uiState.update { it.copy(photoCount = count) }
@@ -172,6 +174,7 @@ class CameraViewModel @Inject constructor(
 
     private fun capturePhoto() {
         val capture = imageCapture ?: return
+        if (_uiState.value.processingCount > 0) return
 
         triggerHaptic()
 
@@ -202,13 +205,16 @@ class CameraViewModel @Inject constructor(
         _uiState.update { it.copy(processingCount = it.processingCount + 1) }
         withContext(Dispatchers.IO) {
             var finalBitmap: Bitmap? = null
+            var originalBitmap: Bitmap? = null
             try {
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
+                    inSampleSize = 2
                 }
-                var originalBitmap = BitmapFactory.decodeFile(tempPath, options)
+                originalBitmap = BitmapFactory.decodeFile(tempPath, options)
                 if (originalBitmap == null) {
                     android.util.Log.e("MoodSnap", "Failed to decode: $tempPath")
+                    _uiState.update { it.copy(errorMessage = "Failed to load photo") }
                     return@withContext
                 }
 
@@ -229,7 +235,10 @@ class CameraViewModel @Inject constructor(
                         ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
                     }
                     val rotated = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                    if (rotated !== originalBitmap) originalBitmap.recycle()
+                    if (rotated !== originalBitmap) {
+                        originalBitmap.recycle()
+                        originalBitmap = null
+                    }
                     originalBitmap = rotated
                 }
 
@@ -239,7 +248,6 @@ class CameraViewModel @Inject constructor(
                     settings = settings,
                     quality = settings.qualityType
                 )
-                originalBitmap.recycle()
 
                 if (settings.isAiEnhanceEnabled) {
                     val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
@@ -280,12 +288,13 @@ class CameraViewModel @Inject constructor(
                 _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath, savedMessage = "Saved") }
             } catch (e: OutOfMemoryError) {
                 android.util.Log.e("MoodSnap", "OOM during processing", e)
-                _uiState.update { it.copy(errorMessage = "Photo too large for memory") }
+                _uiState.update { it.copy(errorMessage = "Out of memory. Try without AI/HD enhance.") }
             } catch (e: Exception) {
                 android.util.Log.e("MoodSnap", "Process failed: ${e.javaClass.simpleName}: ${e.message}", e)
                 _uiState.update { it.copy(errorMessage = "Failed: ${e.javaClass.simpleName}: ${e.message}") }
             } finally {
                 try { finalBitmap?.recycle() } catch (_: Exception) {}
+                try { originalBitmap?.recycle() } catch (_: Exception) {}
                 try { File(tempPath).delete() } catch (_: Exception) {}
                 _uiState.update { it.copy(processingCount = maxOf(0, it.processingCount - 1)) }
             }
@@ -524,6 +533,7 @@ class CameraViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        UpscaylUpscaler.close()
         sceneAnalyzer.close()
     }
 }
