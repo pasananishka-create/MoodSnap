@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,6 +90,24 @@ fun PhotoDetailScreen(
             },
             actions = {
                 uiState.photo?.let { photo ->
+                    IconButton(
+                        onClick = { viewModel.upscalePhoto() },
+                        enabled = !uiState.isUpscaling
+                    ) {
+                        if (uiState.isUpscaling) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MoodAccent,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "AI Upscale",
+                                tint = MoodAccent
+                            )
+                        }
+                    }
                     IconButton(onClick = {
                         viewModel.deletePhoto()
                         onNavigateBack()
@@ -104,6 +124,26 @@ fun PhotoDetailScreen(
                 containerColor = MoodSurface
             )
         )
+
+        uiState.upscaleProgress?.let { progress ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MoodAccent.copy(alpha = 0.15f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = MoodAccent,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(progress, color = MoodAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
 
         uiState.photo?.let { photo ->
             Box(

@@ -25,6 +25,8 @@ class PhotoRepository @Inject constructor(
 
     suspend fun insertPhoto(photo: PhotoEntity): Long = photoDao.insertPhoto(photo)
 
+    suspend fun updatePhoto(photo: PhotoEntity) = photoDao.updatePhoto(photo)
+
     suspend fun deletePhoto(photo: PhotoEntity) {
         try {
             File(photo.filePath).delete()

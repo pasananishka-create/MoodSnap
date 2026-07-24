@@ -128,40 +128,29 @@ fun CameraScreen(
     }
 
     var livePreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var cachedSourceBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
         viewModel.startCamera(lifecycleOwner, previewView)
-        kotlinx.coroutines.delay(600)
-        try {
-            val bmp = previewView.bitmap
-            if (bmp != null && bmp.width > 0 && bmp.height > 0) {
-                val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
-                cachedSourceBitmap = src
-                val processed = withContext(Dispatchers.Default) {
-                    PreviewProcessor.processPreview(src, uiState.settings)
-                }
-                livePreviewBitmap = processed
-            }
-        } catch (_: Exception) {}
     }
 
-    LaunchedEffect(
-        uiState.settings.emulationType, uiState.settings.toneType,
-        uiState.settings.fade, uiState.settings.contrast,
-        uiState.settings.brightness, uiState.settings.temperature,
-        uiState.settings.vignette, uiState.settings.cinematicLut,
-        uiState.settings.isGrainEnabled, uiState.settings.tint,
-        uiState.settings.lutIntensity, uiState.settings.isHalationEnabled,
-        uiState.settings.halationIntensity
-    ) {
-        val src = cachedSourceBitmap ?: return@LaunchedEffect
-        val processed = withContext(Dispatchers.Default) {
-            PreviewProcessor.processPreview(src, uiState.settings)
+    LaunchedEffect(lifecycleOwner, uiState.settings.isFrontCamera) {
+        kotlinx.coroutines.delay(800)
+        while (true) {
+            try {
+                val bmp = previewView.bitmap
+                if (bmp != null && bmp.width > 0 && bmp.height > 0) {
+                    val src = Bitmap.createScaledBitmap(bmp, 320, 240, true)
+                    val processed = withContext(Dispatchers.Default) {
+                        PreviewProcessor.processPreview(src, uiState.settings)
+                    }
+                    src.recycle()
+                    val old = livePreviewBitmap
+                    livePreviewBitmap = processed
+                    if (old != null && old !== processed) old.recycle()
+                }
+            } catch (_: Exception) {}
+            kotlinx.coroutines.delay(120)
         }
-        val old = livePreviewBitmap
-        livePreviewBitmap = processed
-        if (old != null && old !== processed) old.recycle()
     }
 
     var pinchZoom by remember { mutableFloatStateOf(uiState.currentZoom) }

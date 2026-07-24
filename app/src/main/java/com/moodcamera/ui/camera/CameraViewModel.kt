@@ -35,7 +35,6 @@ import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
-import com.moodcamera.processing.enhance.UpscaylUpscaler
 
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -86,7 +85,6 @@ class CameraViewModel @Inject constructor(
     private var cameraProvider: ProcessCameraProvider? = null
 
     init {
-        UpscaylUpscaler.init(application)
         viewModelScope.launch {
             photoRepository.getPhotoCount().collect { count ->
                 _uiState.update { it.copy(photoCount = count) }
@@ -174,7 +172,6 @@ class CameraViewModel @Inject constructor(
 
     private fun capturePhoto() {
         val capture = imageCapture ?: return
-        if (_uiState.value.processingCount > 0) return
 
         triggerHaptic()
 
@@ -253,16 +250,10 @@ class CameraViewModel @Inject constructor(
                     val aiResult = AiEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     processedBitmap.recycle()
                     processedBitmap = aiResult
-                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
-                    if (upscaled !== processedBitmap) processedBitmap.recycle()
-                    processedBitmap = upscaled
                 } else if (settings.isHdEnabled) {
                     val hdResult = HdEnhancer.enhance(processedBitmap, settings.hdIntensity)
                     processedBitmap.recycle()
                     processedBitmap = hdResult
-                    val upscaled = AiEnhancer.upscaleTo4K(processedBitmap)
-                    if (upscaled !== processedBitmap) processedBitmap.recycle()
-                    processedBitmap = upscaled
                 }
 
                 finalBitmap = processedBitmap
@@ -533,7 +524,6 @@ class CameraViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        UpscaylUpscaler.close()
         sceneAnalyzer.close()
     }
 }

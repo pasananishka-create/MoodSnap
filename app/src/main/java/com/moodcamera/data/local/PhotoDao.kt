@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Update
 import com.moodcamera.data.model.PhotoEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -26,4 +27,7 @@ interface PhotoDao {
 
     @Query("SELECT COUNT(*) FROM photos")
     fun getPhotoCount(): Flow<Int>
+
+    @Update
+    suspend fun updatePhoto(photo: PhotoEntity)
 }
