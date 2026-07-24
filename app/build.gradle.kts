@@ -14,12 +14,10 @@ android {
         applicationId = "com.moodcamera"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "1.5.4"
 
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
+
     }
 
     signingConfigs {
@@ -106,9 +104,6 @@ dependencies {
 
     // ExifInterface
     implementation(libs.exifinterface)
-
-    // ONNX Runtime (Upscayl AI upscaling)
-    implementation(libs.onnxruntime.android)
 
     // Coil
     implementation(libs.coil.compose)

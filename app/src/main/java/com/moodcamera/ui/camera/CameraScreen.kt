@@ -181,15 +181,17 @@ fun CameraScreen(
                 }
         )
 
-        livePreviewBitmap?.let { bitmap ->
-            key(bitmap) {
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    alpha = 1f
-                )
+        if (uiState.settings.emulationType != EmulationType.ORIGINAL) {
+            livePreviewBitmap?.let { bitmap ->
+                key(bitmap) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        alpha = 1f
+                    )
+                }
             }
         }
 
