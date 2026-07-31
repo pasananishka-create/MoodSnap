@@ -36,6 +36,7 @@ import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
 import com.moodcamera.processing.enhance.SuperResZoom
+import com.moodcamera.processing.enhance.UpscaylUpscaler
 
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -211,7 +212,8 @@ class CameraViewModel @Inject constructor(
     }
 
     private fun captureBurstForSuperRes(capture: ImageCapture, zoom: Float) {
-        val burstSize = 6
+        // Short burst only to pick the sharpest frame for the AI upscaler.
+        val burstSize = 3
         val files = ArrayList<String>(burstSize)
         _uiState.update { it.copy(isSuperResCapture = true, superResStatus = "Super Res: capturing...") }
 
@@ -252,14 +254,30 @@ class CameraViewModel @Inject constructor(
     }
 
     private suspend fun processSuperResBurst(filePaths: List<String>, zoom: Float) {
-        _uiState.update { it.copy(superResStatus = "Super Res: merging frames...") }
+        val app = getApplication<Application>()
+        if (UpscaylUpscaler.needsDownload(app)) {
+            _uiState.update { it.copy(superResStatus = "Super Res: downloading AI model (~64MB)...") }
+        } else {
+            _uiState.update { it.copy(superResStatus = "Super Res: loading AI upscaler...") }
+        }
         withContext(Dispatchers.IO) {
-            var mergedBitmap: Bitmap? = null
+            var resultBitmap: Bitmap? = null
             try {
-                val frames = ArrayList<Bitmap>(filePaths.size)
-                // Decode at a memory-safe resolution (long edge ~1920px) so six
-                // frames plus the merge buffers fit the (large) heap.
-                val burstCap = 1920
+                UpscaylUpscaler.init(app) { bytes ->
+                    val mb = bytes / (1 shl 20)
+                    if (bytes % (1 shl 20) == 0L) {
+                        _uiState.update { it.copy(superResStatus = "Super Res: downloading AI model ${mb}MB...") }
+                    }
+                }
+                if (!UpscaylUpscaler.isReady()) {
+                    android.util.Log.e("MoodSnap", "AI upscale unavailable: ${UpscaylUpscaler.getLastError()}")
+                    _uiState.update { it.copy(errorMessage = "AI upscale unavailable: ${UpscaylUpscaler.getLastError() ?: "model load failed"}") }
+                    return@withContext
+                }
+
+                // Decode the burst at the AI working size and keep the sharpest
+                // frame - clean input gives the best neural upscale.
+                val burstCap = 640
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(filePaths.firstOrNull(), bounds)
                 var sampleSize = 1
@@ -271,44 +289,62 @@ class CameraViewModel @Inject constructor(
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                     inSampleSize = sampleSize
                 }
+                var bestBmp: Bitmap? = null
+                var bestScore = -1f
                 for (path in filePaths) {
                     try {
                         val bmp = BitmapFactory.decodeFile(path, options)
-                        if (bmp != null) {
-                            if (bmp.width > burstCap) {
-                                val scale = burstCap.toFloat() / bmp.width
-                                val nw = (bmp.width * scale).toInt()
-                                val nh = (bmp.height * scale).toInt()
-                                val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
-                                bmp.recycle()
-                                frames.add(scaled)
-                            } else {
-                                frames.add(bmp)
-                            }
+                        if (bmp == null) continue
+                        var scaled = bmp
+                        if (bmp.width > burstCap) {
+                            val scale = burstCap.toFloat() / bmp.width
+                            scaled = Bitmap.createScaledBitmap(
+                                bmp,
+                                (bmp.width * scale).toInt(),
+                                (bmp.height * scale).toInt(),
+                                true
+                            )
+                            bmp.recycle()
+                        }
+                        val pix = IntArray(scaled.width * scaled.height)
+                        scaled.getPixels(pix, 0, scaled.width, 0, 0, scaled.width, scaled.height)
+                        val s = SuperResZoom.sharpness(pix, scaled.width, scaled.height)
+                        if (s > bestScore) {
+                            bestScore = s
+                            bestBmp?.recycle()
+                            bestBmp = scaled
+                        } else {
+                            scaled.recycle()
                         }
                     } catch (_: Exception) {}
                 }
 
                 filePaths.forEach { File(it).delete() }
 
-                if (frames.size >= 2) {
-                    mergedBitmap = SuperResZoom.mergeBurst(frames)
+                if (bestBmp == null) {
+                    _uiState.update { it.copy(errorMessage = "Super Res failed: no usable frames") }
+                    return@withContext
                 }
-                frames.forEach { it.recycle() }
 
-                if (mergedBitmap != null) {
+                _uiState.update { it.copy(superResStatus = "Super Res: AI upscaling...") }
+                resultBitmap = UpscaylUpscaler.upscale(bestBmp, maxInputDim = 640) { done, total ->
+                    if (total > 0) {
+                        _uiState.update { it.copy(superResStatus = "Super Res: AI upscaling $done/$total") }
+                    }
+                }
+                bestBmp.recycle()
+
+                if (resultBitmap != null) {
                     _uiState.update { it.copy(superResStatus = "Super Res: enhancing...") }
                     val settings = _uiState.value.settings
-                    // Keep up to 2880px so the merged result stays bigger than
-                    // a normal 2400px capture
                     var processed = ImageProcessor.processImage(
-                        original = mergedBitmap!!,
+                        original = resultBitmap!!,
                         settings = settings,
                         quality = settings.qualityType,
                         maxDimension = 2880
                     )
-                    if (mergedBitmap !== processed) mergedBitmap!!.recycle()
-                    mergedBitmap = null
+                    if (processed !== resultBitmap) resultBitmap!!.recycle()
+                    resultBitmap = null
 
                     if (settings.isAiEnhanceEnabled) {
                         val aiResult = AiEnhancer.enhance(processed, settings.hdIntensity)
@@ -319,11 +355,9 @@ class CameraViewModel @Inject constructor(
                         processed.recycle()
                         processed = hdResult
                     } else {
-                        // Always sharpen super-res output so the multi-frame
-                        // detail is visible even without HD/AI toggles. The merge
-                        // now denoises, so a moderate sharpen adds crispness
-                        // without amplifying residual noise into visible grain.
-                        val sharp = HdEnhancer.enhance(processed, 0.45f)
+                        // Light sharpen so the AI-synthesized detail reads
+                        // crisply without amplifying artifacts.
+                        val sharp = HdEnhancer.enhance(processed, 0.35f)
                         processed.recycle()
                         processed = sharp
                     }
@@ -347,7 +381,7 @@ class CameraViewModel @Inject constructor(
 
                     _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath, savedMessage = "Saved") }
                 } else {
-                    _uiState.update { it.copy(errorMessage = "Super Res merge failed") }
+                    _uiState.update { it.copy(errorMessage = "Super Res failed") }
                 }
             } catch (e: OutOfMemoryError) {
                 android.util.Log.e("MoodSnap", "OOM during Super Res", e)
@@ -356,7 +390,7 @@ class CameraViewModel @Inject constructor(
                 android.util.Log.e("MoodSnap", "Super Res failed", e)
                 _uiState.update { it.copy(errorMessage = "Super Res failed: ${e.message}") }
             } finally {
-                mergedBitmap?.recycle()
+                resultBitmap?.recycle()
                 _uiState.update { it.copy(isSuperResCapture = false, superResStatus = null) }
             }
         }

@@ -31,10 +31,15 @@ object UpscaylUpscaler {
     private var ortEnv: OrtEnvironment? = null
     private var initFailed = false
     private var initStarted = false
+    private var lastError: String? = null
 
     val isDownloading: Boolean get() = initStarted && session == null && !initFailed
 
-    suspend fun init(context: Context) {
+    fun needsDownload(context: Context): Boolean = !File(context.filesDir, MODEL_FILENAME).exists()
+
+    fun getLastError(): String? = lastError
+
+    suspend fun init(context: Context, onProgress: (Long) -> Unit = {}) {
         if (session != null || initFailed || initStarted) return
         initStarted = true
         try {
@@ -44,7 +49,14 @@ object UpscaylUpscaler {
                 withContext(Dispatchers.IO) {
                     URL(MODEL_URL).openStream().use { input ->
                         modelFile.outputStream().use { output ->
-                            input.copyTo(output)
+                            val buffer = ByteArray(64 * 1024)
+                            var read: Int
+                            var downloaded = 0L
+                            while (input.read(buffer).also { read = it } != -1) {
+                                output.write(buffer, 0, read)
+                                downloaded += read
+                                onProgress(downloaded)
+                            }
                         }
                     }
                 }
@@ -61,6 +73,7 @@ object UpscaylUpscaler {
             Log.i("UpscaylUpscaler", "AI model loaded successfully")
         } catch (e: Exception) {
             Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
+            lastError = e.message
             session = null
             initFailed = true
         }
@@ -76,7 +89,7 @@ object UpscaylUpscaler {
 
     fun isReady(): Boolean = session != null
 
-    suspend fun upscale(bitmap: Bitmap): Bitmap {
+    suspend fun upscale(bitmap: Bitmap, maxInputDim: Int = MAX_INPUT_DIM, onProgress: (Int, Int) -> Unit = { _, _ -> }): Bitmap {
         val sess = session
         val env = ortEnv
         if (sess == null || env == null) return withContext(Dispatchers.IO) { algorithmicUpscale(bitmap) }
@@ -85,8 +98,8 @@ object UpscaylUpscaler {
         val h = bitmap.height
         if (w < 8 || h < 8) return bitmap
 
-        val src = if (w > MAX_INPUT_DIM || h > MAX_INPUT_DIM) {
-            val ratio = MAX_INPUT_DIM.toFloat() / maxOf(w, h)
+        val src = if (w > maxInputDim || h > maxInputDim) {
+            val ratio = maxInputDim.toFloat() / maxOf(w, h)
             val nw = (w * ratio).roundToInt().coerceAtLeast(8)
             val nh = (h * ratio).roundToInt().coerceAtLeast(8)
             Bitmap.createScaledBitmap(bitmap, nw, nh, true)
@@ -109,6 +122,18 @@ object UpscaylUpscaler {
         val resultCanvas = Canvas(result)
         val tileOverlap = 4
         val step = TILE_SIZE - tileOverlap * 2
+
+        var totalTiles = 0
+        var ty0 = 0
+        while (ty0 < sh) {
+            var tx0 = 0
+            while (tx0 < sw) {
+                if (min(TILE_SIZE, sw - tx0) >= 8 && min(TILE_SIZE, sh - ty0) >= 8) totalTiles++
+                tx0 += step
+            }
+            ty0 += step
+        }
+        var doneTiles = 0
 
         withContext(Dispatchers.IO) {
             var ty = 0
@@ -141,6 +166,8 @@ object UpscaylUpscaler {
                     } catch (e: Exception) {
                         Log.e("UpscaylUpscaler", "Tile error: ${e.message}")
                     }
+                    doneTiles++
+                    onProgress(doneTiles, totalTiles)
                     tx += step
                 }
                 ty += step

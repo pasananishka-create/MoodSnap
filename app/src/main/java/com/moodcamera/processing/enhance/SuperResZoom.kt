@@ -695,7 +695,7 @@ object SuperResZoom {
      * measured on a 3x3 box-blurred luminance so sensor noise (which looks like
      * detail to a raw gradient metric) does not win the selection.
      */
-    private fun sharpness(pix: IntArray, w: Int, h: Int): Float {
+    fun sharpness(pix: IntArray, w: Int, h: Int): Float {
         val n = w * h
         val lumaArr = IntArray(n)
         for (i in 0 until n) lumaArr[i] = luma(pix[i])
