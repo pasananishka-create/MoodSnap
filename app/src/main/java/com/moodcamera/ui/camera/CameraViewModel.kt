@@ -35,6 +35,7 @@ import com.moodcamera.domain.model.SceneInfo
 import com.moodcamera.processing.engine.ImageProcessor
 import com.moodcamera.processing.enhance.AiEnhancer
 import com.moodcamera.processing.enhance.HdEnhancer
+import com.moodcamera.processing.enhance.SuperResZoom
 
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -66,7 +67,9 @@ data class CameraUiState(
     val savedMessage: String? = null,
     val timerCountdown: Int = 0,
     val isTimerActive: Boolean = false,
-    val zoomPreset: Float = 1f
+    val zoomPreset: Float = 1f,
+    val isSuperResCapture: Boolean = false,
+    val superResStatus: String? = null
 )
 
 @HiltViewModel
@@ -175,6 +178,15 @@ class CameraViewModel @Inject constructor(
 
         triggerHaptic()
 
+        val currentZoom = _uiState.value.currentZoom
+        if (currentZoom >= 1.5f) {
+            captureBurstForSuperRes(capture, currentZoom)
+        } else {
+            captureSingle(capture)
+        }
+    }
+
+    private fun captureSingle(capture: ImageCapture) {
         val tempFile = photoRepository.createTempPhotoFile()
         val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
 
@@ -196,6 +208,135 @@ class CameraViewModel @Inject constructor(
                 }
             }
         )
+    }
+
+    private fun captureBurstForSuperRes(capture: ImageCapture, zoom: Float) {
+        val burstSize = 6
+        val files = ArrayList<String>(burstSize)
+        _uiState.update { it.copy(isSuperResCapture = true, superResStatus = "Super Res: capturing...") }
+
+        fun captureFrame(index: Int) {
+            val tempFile = photoRepository.createTempPhotoFile()
+            val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
+            capture.takePicture(
+                outputOptions,
+                ContextCompat.getMainExecutor(getApplication()),
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                        files.add(tempFile.absolutePath)
+                        if (files.size < burstSize) {
+                            _uiState.update { it.copy(superResStatus = "Super Res: ${files.size}/${burstSize} frames") }
+                            captureFrame(files.size)
+                        } else {
+                            viewModelScope.launch {
+                                processSuperResBurst(files, zoom)
+                            }
+                        }
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
+                        tempFile.delete()
+                        if (files.isEmpty()) {
+                            _uiState.update { it.copy(isSuperResCapture = false, superResStatus = null) }
+                            _uiState.update { it.copy(errorMessage = "Burst capture failed, retry") }
+                        } else {
+                            viewModelScope.launch {
+                                processSuperResBurst(files, zoom)
+                            }
+                        }
+                    }
+                }
+            )
+        }
+        captureFrame(0)
+    }
+
+    private suspend fun processSuperResBurst(filePaths: List<String>, zoom: Float) {
+        _uiState.update { it.copy(superResStatus = "Super Res: merging frames...") }
+        withContext(Dispatchers.IO) {
+            var mergedBitmap: Bitmap? = null
+            try {
+                val frames = ArrayList<Bitmap>(filePaths.size)
+                val options = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                    inSampleSize = 1
+                }
+                for (path in filePaths) {
+                    try {
+                        val bmp = BitmapFactory.decodeFile(path, options)
+                        if (bmp != null) {
+                            if (bmp.width > 1200) {
+                                val scale = 1200f / bmp.width
+                                val nw = (bmp.width * scale).toInt()
+                                val nh = (bmp.height * scale).toInt()
+                                val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
+                                bmp.recycle()
+                                frames.add(scaled)
+                            } else {
+                                frames.add(bmp)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                filePaths.forEach { File(it).delete() }
+
+                if (frames.size >= 2) {
+                    mergedBitmap = SuperResZoom.mergeBurst(frames)
+                }
+                frames.forEach { it.recycle() }
+
+                if (mergedBitmap != null) {
+                    _uiState.update { it.copy(superResStatus = "Super Res: enhancing...") }
+                    val settings = _uiState.value.settings
+                    var processed = ImageProcessor.processImage(
+                        original = mergedBitmap!!,
+                        settings = settings,
+                        quality = settings.qualityType
+                    )
+                    if (mergedBitmap !== processed) mergedBitmap!!.recycle()
+                    mergedBitmap = null
+
+                    if (settings.isAiEnhanceEnabled) {
+                        val aiResult = AiEnhancer.enhance(processed, settings.hdIntensity)
+                        processed.recycle()
+                        processed = aiResult
+                    } else if (settings.isHdEnabled) {
+                        val hdResult = HdEnhancer.enhance(processed, settings.hdIntensity)
+                        processed.recycle()
+                        processed = hdResult
+                    }
+
+                    val finalBitmap = processed
+                    val processedFile = photoRepository.createPhotoFile()
+                    processedFile.outputStream().use { fos ->
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                    }
+
+                    val photoEntity = PhotoEntity(
+                        filePath = processedFile.absolutePath,
+                        originalFilePath = "",
+                        presetName = settings.getPresetName(),
+                        width = finalBitmap.width,
+                        height = finalBitmap.height
+                    )
+                    photoRepository.insertPhoto(photoEntity)
+                    try { saveToGallery(finalBitmap) } catch (e: Exception) {}
+                    finalBitmap.recycle()
+
+                    _uiState.update { it.copy(lastPhotoPath = processedFile.absolutePath, savedMessage = "Saved") }
+                } else {
+                    _uiState.update { it.copy(errorMessage = "Super Res merge failed") }
+                }
+            } catch (e: OutOfMemoryError) {
+                _uiState.update { it.copy(errorMessage = "Out of memory during Super Res") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = "Super Res failed: ${e.message}") }
+            } finally {
+                mergedBitmap?.recycle()
+                _uiState.update { it.copy(isSuperResCapture = false, superResStatus = null) }
+            }
+        }
     }
 
     private suspend fun processAndSavePhoto(tempPath: String) {

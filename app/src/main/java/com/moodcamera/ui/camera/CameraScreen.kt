@@ -235,6 +235,25 @@ fun CameraScreen(
             }
         }
 
+        // Super Res zoom status
+        uiState.superResStatus?.let { status ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MoodAccent.copy(alpha = 0.2f))
+                    .border(0.5.dp, MoodAccent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("\u2728", fontSize = 12.sp)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(status, color = MoodAccent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+
         // Top bar
         TopBar(
             flashMode = uiState.settings.flashMode,
