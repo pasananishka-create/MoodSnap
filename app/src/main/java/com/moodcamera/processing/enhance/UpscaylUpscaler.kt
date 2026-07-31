@@ -24,7 +24,8 @@ object UpscaylUpscaler {
     private const val MODEL_URL = "https://huggingface.co/AXERA-TECH/Real-ESRGAN/resolve/main/onnx/realesrgan-x4.onnx"
     private const val MODEL_FILENAME = "realesrgan-x4.onnx"
     private const val SCALE = 4
-    private const val TILE_SIZE = 128
+    // This ONNX export is fixed-shape: input must be exactly 64x64 (-> 256x256).
+    private const val TILE_SIZE = 64
     private const val MAX_INPUT_DIM = 512
 
     private var session: OrtSession? = null
@@ -154,11 +155,18 @@ object UpscaylUpscaler {
                             val dstY = ty * SCALE
                             val oX = tileOverlap * SCALE
                             val oY = tileOverlap * SCALE
-                            val srcRect = Rect(oX, oY, upscaled.width - oX, upscaled.height - oY)
-                            val dstRect = Rect(dstX + oX, dstY + oY,
-                                dstX + tileW * SCALE - oX, dstY + tileH * SCALE - oY)
-                            if (srcRect.width() > 0 && srcRect.height() > 0 &&
-                                dstRect.width() > 0 && dstRect.height() > 0) {
+                            // Drop the overlap margin on interior edges so tiles
+                            // stitch seamlessly; on the last column/row extend to
+                            // the image edge (padded pixels replicate the border).
+                            val isLastCol = tx + TILE_SIZE >= sw
+                            val isLastRow = ty + TILE_SIZE >= sh
+                            val sx0 = if (isLastCol) 0 else oX
+                            val sy0 = if (isLastRow) 0 else oY
+                            val swd = if (isLastCol) tileW * SCALE - sx0 else tileW * SCALE - 2 * oX
+                            val shd = if (isLastRow) tileH * SCALE - sy0 else tileH * SCALE - 2 * oY
+                            if (swd > 0 && shd > 0) {
+                                val srcRect = Rect(sx0, sy0, sx0 + swd, sy0 + shd)
+                                val dstRect = Rect(dstX + sx0, dstY + sy0, dstX + sx0 + swd, dstY + sy0 + shd)
                                 resultCanvas.drawBitmap(upscaled, srcRect, dstRect, null)
                             }
                             upscaled.recycle()
@@ -185,15 +193,24 @@ object UpscaylUpscaler {
             val pixels = IntArray(w * h)
             tile.getPixels(pixels, 0, w, 0, 0, w, h)
 
-            val floatArray = FloatArray(3 * h * w)
-            for (i in pixels.indices) {
-                val px = pixels[i]
-                floatArray[i] = Color.red(px) / 255f
-                floatArray[w * h + i] = Color.green(px) / 255f
-                floatArray[2 * w * h + i] = Color.blue(px) / 255f
+            // The model input is fixed at TILE_SIZE x TILE_SIZE, so smaller edge
+            // tiles are padded by replicating the border pixels.
+            val pw = TILE_SIZE
+            val ph = TILE_SIZE
+            val floatArray = FloatArray(3 * ph * pw)
+            for (y in 0 until ph) {
+                val sy = if (y < h) y else h - 1
+                for (x in 0 until pw) {
+                    val sx = if (x < w) x else w - 1
+                    val px = pixels[sy * w + sx]
+                    val i = y * pw + x
+                    floatArray[i] = Color.red(px) / 255f
+                    floatArray[pw * ph + i] = Color.green(px) / 255f
+                    floatArray[2 * pw * ph + i] = Color.blue(px) / 255f
+                }
             }
 
-            val shape = longArrayOf(1, 3, h.toLong(), w.toLong())
+            val shape = longArrayOf(1, 3, ph.toLong(), pw.toLong())
             val inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArray), shape)
             val inputName = sess.inputNames.first()
             val results = sess.run(Collections.singletonMap(inputName, inputTensor))
@@ -202,6 +219,10 @@ object UpscaylUpscaler {
             val output = results[0].value as Array<Array<Array<FloatArray>>>
             val outH = output[0][0].size
             val outW = output[0][0][0].size
+            if (outH != ph * SCALE || outW != pw * SCALE) {
+                Log.e("UpscaylUpscaler", "Unexpected output size ${outW}x$outH")
+                return null
+            }
 
             val outBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
             val outPixels = IntArray(outW * outH)
