@@ -12,8 +12,6 @@ import android.graphics.Rect
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.URL
 import java.nio.FloatBuffer
 import java.util.Collections
 import kotlin.math.min
@@ -21,8 +19,7 @@ import kotlin.math.roundToInt
 
 object UpscaylUpscaler {
 
-    private const val MODEL_URL = "https://huggingface.co/AXERA-TECH/Real-ESRGAN/resolve/main/onnx/realesrgan-x4.onnx"
-    private const val MODEL_FILENAME = "realesrgan-x4.onnx"
+    private const val MODEL_ASSET = "models/realesr-general-x4v3.onnx"
     private const val SCALE = 4
     // This ONNX export is fixed-shape: input must be exactly 64x64 (-> 256x256).
     private const val TILE_SIZE = 64
@@ -34,9 +31,9 @@ object UpscaylUpscaler {
     private var initStarted = false
     private var lastError: String? = null
 
-    val isDownloading: Boolean get() = initStarted && session == null && !initFailed
+    val isDownloading: Boolean get() = false
 
-    fun needsDownload(context: Context): Boolean = !File(context.filesDir, MODEL_FILENAME).exists()
+    fun needsDownload(context: Context): Boolean = false
 
     fun getLastError(): String? = lastError
 
@@ -44,59 +41,31 @@ object UpscaylUpscaler {
         if (session != null || initFailed || initStarted) return
         initStarted = true
         try {
-            val modelFile = File(context.filesDir, MODEL_FILENAME)
-            if (!modelFile.exists()) {
-                Log.i("UpscaylUpscaler", "Downloading AI model (~64MB)...")
-                withContext(Dispatchers.IO) {
-                    URL(MODEL_URL).openStream().use { input ->
-                        modelFile.outputStream().use { output ->
-                            val buffer = ByteArray(64 * 1024)
-                            var read: Int
-                            var downloaded = 0L
-                            while (input.read(buffer).also { read = it } != -1) {
-                                output.write(buffer, 0, read)
-                                downloaded += read
-                                onProgress(downloaded)
-                            }
-                        }
-                    }
-                }
-                Log.i("UpscaylUpscaler", "Model downloaded: ${modelFile.length()} bytes")
+            val modelBytes = withContext(Dispatchers.IO) {
+                context.assets.open(MODEL_ASSET).use { it.readBytes() }
             }
-
-            val modelBytes = withContext(Dispatchers.IO) { modelFile.readBytes() }
             ortEnv = OrtEnvironment.getEnvironment()
 
-            // Prefer the NNAPI delegate, but many device NNAPI drivers cannot
-            // run this model, so verify with a real inference and fall back to
-            // CPU if the driver errors or produces a degenerate result.
-            session = try {
-                val nnapiOptions = OrtSession.SessionOptions().apply {
-                    try { addNnapi() } catch (_: Exception) {}
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                }
-                val s = ortEnv!!.createSession(modelBytes, nnapiOptions)
+            // CPU-only inference. The bundled compact model (~4.7MB) runs in a
+            // fraction of the time of the previous Real-ESRGAN x4 export, so it
+            // completes in seconds without NNAPI - which is unreliable on many
+            // devices and could hang, failing the whole super-res pipeline.
+            val cpuOptions = OrtSession.SessionOptions().apply {
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                 try {
-                    sanityCheckSession(s, ortEnv!!)
-                } catch (e: Throwable) {
-                    try { s.close() } catch (_: Exception) {}
-                    throw e
-                }
-                Log.i("UpscaylUpscaler", "AI model loaded with NNAPI acceleration")
-                s
-            } catch (e: Throwable) {
-                Log.w("UpscaylUpscaler", "NNAPI session failed (${e.message}); retrying on CPU")
-                val cpuOptions = OrtSession.SessionOptions().apply {
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    try {
-                        setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() - 1))
-                    } catch (_: Exception) {}
-                }
-                ortEnv!!.createSession(modelBytes, cpuOptions).also {
-                    Log.i("UpscaylUpscaler", "AI model loaded on CPU (${it.inputNames})")
-                }
+                    setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() - 1))
+                } catch (_: Exception) {}
             }
+            val s = ortEnv!!.createSession(modelBytes, cpuOptions)
+            try {
+                sanityCheckSession(s, ortEnv!!)
+            } catch (e: Throwable) {
+                try { s.close() } catch (_: Exception) {}
+                throw e
+            }
+            session = s
             lastError = null
+            Log.i("UpscaylUpscaler", "AI model loaded (CPU, ${modelBytes.size / 1048576}MB)")
         } catch (e: Throwable) {
             Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
             lastError = e.message

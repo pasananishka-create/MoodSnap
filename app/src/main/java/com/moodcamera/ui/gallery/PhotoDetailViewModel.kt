@@ -70,7 +70,7 @@ class PhotoDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (!UpscaylUpscaler.isReady()) {
-                    _uiState.update { it.copy(upscaleProgress = "Downloading AI model (64MB)...") }
+                    _uiState.update { it.copy(upscaleProgress = "Loading AI upscaler...") }
                     UpscaylUpscaler.init(application)
                 }
 

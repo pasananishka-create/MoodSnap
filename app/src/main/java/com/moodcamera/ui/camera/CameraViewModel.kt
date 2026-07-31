@@ -255,20 +255,11 @@ class CameraViewModel @Inject constructor(
 
     private suspend fun processSuperResBurst(filePaths: List<String>, zoom: Float) {
         val app = getApplication<Application>()
-        if (UpscaylUpscaler.needsDownload(app)) {
-            _uiState.update { it.copy(superResStatus = "Super Res: downloading AI model (~64MB)...") }
-        } else {
-            _uiState.update { it.copy(superResStatus = "Super Res: loading AI upscaler...") }
-        }
+        _uiState.update { it.copy(superResStatus = "Super Res: loading AI upscaler...") }
         withContext(Dispatchers.IO) {
             var resultBitmap: Bitmap? = null
             try {
-                UpscaylUpscaler.init(app) { bytes ->
-                    val mb = bytes / (1 shl 20)
-                    if (bytes % (1 shl 20) == 0L) {
-                        _uiState.update { it.copy(superResStatus = "Super Res: downloading AI model ${mb}MB...") }
-                    }
-                }
+                UpscaylUpscaler.init(app)
                 if (!UpscaylUpscaler.isReady()) {
                     // Never abort - upscale() degrades to a basic 2x upscale so a
                     // photo always gets saved. Log the real cause for diagnosis.
