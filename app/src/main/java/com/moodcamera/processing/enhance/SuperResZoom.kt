@@ -38,8 +38,8 @@ import kotlin.math.sqrt
 object SuperResZoom {
 
     private const val TAG = "SuperResZoom"
-    private const val MAX_INPUT_DIM = 2400
-    private const val MAX_OUTPUT_DIM = 2880
+    private const val MAX_INPUT_DIM = 1920
+    private const val MAX_OUTPUT_DIM = 2560
 
     // Local motion estimation
     private const val PATCH = 32
@@ -68,6 +68,18 @@ object SuperResZoom {
     private const val MIN_CONF = 0.02f
 
     fun mergeBurst(frames: List<Bitmap>): Bitmap? {
+        return try {
+            mergeBurstInternal(frames)
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "OOM during Super Res merge", e)
+            frames[0]
+        } catch (e: Exception) {
+            Log.e(TAG, "Super Res merge failed: ${e.message}", e)
+            frames[0]
+        }
+    }
+
+    private fun mergeBurstInternal(frames: List<Bitmap>): Bitmap? {
         if (frames.isEmpty()) return null
         if (frames.size == 1) return frames[0]
 
@@ -375,72 +387,55 @@ object SuperResZoom {
      */
     private fun structureTensor(refPix: IntArray, w: Int, h: Int, angle: ByteArray, aniso: ByteArray) {
         val n = w * h
-        val lumaArr = IntArray(n)
-        for (i in 0 until n) lumaArr[i] = luma(refPix[i])
 
-        val gx = FloatArray(n)
-        val gy = FloatArray(n)
+        // 3x3 box-blurred luma. Gradient + tensor are computed from the blurred
+        // luma, which gives stable orientation without storing any tensor buffers.
+        val blurred = IntArray(n)
         for (y in 1 until h - 1) {
             val ro = y * w
             for (x in 1 until w - 1) {
                 val idx = ro + x
-                val tl = lumaArr[idx - w - 1].toFloat()
-                val tc = lumaArr[idx - w].toFloat()
-                val tr = lumaArr[idx - w + 1].toFloat()
-                val ml = lumaArr[idx - 1].toFloat()
-                val mr = lumaArr[idx + 1].toFloat()
-                val bl = lumaArr[idx + w - 1].toFloat()
-                val bc = lumaArr[idx + w].toFloat()
-                val br = lumaArr[idx + w + 1].toFloat()
-                gx[idx] = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
-                gy[idx] = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
+                var s = 0
+                s += luma(refPix[idx - w - 1]); s += luma(refPix[idx - w]); s += luma(refPix[idx - w + 1])
+                s += luma(refPix[idx - 1]); s += luma(refPix[idx]); s += luma(refPix[idx + 1])
+                s += luma(refPix[idx + w - 1]); s += luma(refPix[idx + w]); s += luma(refPix[idx + w + 1])
+                blurred[idx] = s / 9
             }
         }
 
-        val txx = FloatArray(n)
-        val tyy = FloatArray(n)
-        val txy = FloatArray(n)
         for (y in 1 until h - 1) {
             val ro = y * w
             for (x in 1 until w - 1) {
                 val idx = ro + x
-                var sxx = 0f
-                var syy = 0f
-                var sxy = 0f
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-                        val g = gx[idx + dy * w + dx]
-                        val gg = gy[idx + dy * w + dx]
-                        sxx += g * g
-                        syy += gg * gg
-                        sxy += g * gg
-                    }
+                val tl = blurred[idx - w - 1].toFloat()
+                val tc = blurred[idx - w].toFloat()
+                val tr = blurred[idx - w + 1].toFloat()
+                val ml = blurred[idx - 1].toFloat()
+                val mr = blurred[idx + 1].toFloat()
+                val bl = blurred[idx + w - 1].toFloat()
+                val bc = blurred[idx + w].toFloat()
+                val br = blurred[idx + w + 1].toFloat()
+                val gx = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
+                val gy = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
+                val xx = gx * gx
+                val yy = gy * gy
+                val xy = gx * gy
+                val trace = xx + yy
+                if (trace < 0.01f) {
+                    angle[idx] = 0
+                    aniso[idx] = 0
+                    continue
                 }
-                txx[idx] = sxx
-                tyy[idx] = syy
-                txy[idx] = sxy
+                val det = sqrt(0.25f * (xx - yy) * (xx - yy) + xy * xy)
+                val l1 = 0.5f * trace + det
+                val l2 = 0.5f * trace - det
+                var theta = 0.5f * atan2(2f * xy, xx - yy)
+                if (theta < 0f) theta += PI.toFloat()
+                val bin = (theta / PI.toFloat() * NUM_ANGLE_BINS).toInt() % NUM_ANGLE_BINS
+                val a = (l1 - l2) / (l1 + l2)
+                angle[idx] = bin.toByte()
+                aniso[idx] = (a * (ANISO_LEVELS - 1)).roundToInt().coerceIn(0, ANISO_LEVELS - 1).toByte()
             }
-        }
-
-        for (i in 0 until n) {
-            val xx = txx[i]
-            val yy = tyy[i]
-            val xy = txy[i]
-            val trace = xx + yy
-            if (trace < 0.01f) {
-                angle[i] = 0
-                aniso[i] = 0
-                continue
-            }
-            val det = sqrt(0.25f * (xx - yy) * (xx - yy) + xy * xy)
-            val l1 = 0.5f * trace + det
-            val l2 = 0.5f * trace - det
-            var theta = 0.5f * atan2(2f * xy, xx - yy)
-            if (theta < 0f) theta += PI.toFloat()
-            val bin = (theta / PI.toFloat() * NUM_ANGLE_BINS).toInt() % NUM_ANGLE_BINS
-            val a = (l1 - l2) / (l1 + l2)
-            angle[i] = bin.toByte()
-            aniso[i] = (a * (ANISO_LEVELS - 1)).roundToInt().coerceIn(0, ANISO_LEVELS - 1).toByte()
         }
     }
 

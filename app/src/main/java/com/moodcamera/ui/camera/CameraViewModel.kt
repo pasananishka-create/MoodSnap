@@ -257,10 +257,9 @@ class CameraViewModel @Inject constructor(
             var mergedBitmap: Bitmap? = null
             try {
                 val frames = ArrayList<Bitmap>(filePaths.size)
-                // Decode at the highest resolution that stays memory-safe (long
-                // edge ~2400px, largeHeap enabled) so the merge has real detail
-                // and the final 2880px output is only a modest 1.2x upscale.
-                val burstCap = 2400
+                // Decode at a memory-safe resolution (long edge ~1920px) so six
+                // frames plus the merge buffers fit the (large) heap.
+                val burstCap = 1920
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(filePaths.firstOrNull(), bounds)
                 var sampleSize = 1
@@ -351,8 +350,10 @@ class CameraViewModel @Inject constructor(
                     _uiState.update { it.copy(errorMessage = "Super Res merge failed") }
                 }
             } catch (e: OutOfMemoryError) {
-                _uiState.update { it.copy(errorMessage = "Out of memory during Super Res") }
+                android.util.Log.e("MoodSnap", "OOM during Super Res", e)
+                _uiState.update { it.copy(errorMessage = "Out of memory during Super Res. Retry or use lower zoom.") }
             } catch (e: Exception) {
+                android.util.Log.e("MoodSnap", "Super Res failed", e)
                 _uiState.update { it.copy(errorMessage = "Super Res failed: ${e.message}") }
             } finally {
                 mergedBitmap?.recycle()
