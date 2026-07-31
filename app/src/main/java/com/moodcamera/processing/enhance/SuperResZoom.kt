@@ -25,21 +25,20 @@ import kotlin.math.sqrt
  *     block matching (quarter-scale search + full-res refine + parabolic
  *     sub-pixel fit). Unlike a single global translation, this handles the
  *     per-patch offsets produced by hand shake, parallax and rolling shutter.
- *  3. The sharpest frame is splatted at its exact sub-pixel position with extra
- *     weight, so the output is never blurrier than the best single frame. Other
- *     frames are fused with an ANISOTROPIC GAUSSIAN kernel steered by the local
- *     structure tensor: wide along edges (noise averaging) and narrow across
- *     them (high-frequency detail preserved). Flat regions fall back to a small
- *     isotropic kernel.
- *  4. Robust weights gate every contribution from non-reference frames:
- *     alignment confidence (patch match cost) and a radiance/deghosting weight
- *     (color similarity to the reference), so moving objects and misaligned
- *     regions do not ghost.
+ *  3. All frames are fused directly onto a higher-resolution grid with an
+ *     ANISOTROPIC GAUSSIAN kernel steered by the local structure tensor: wide
+ *     along edges and in flat areas (strong multi-frame noise averaging) and
+ *     narrow across edges (high-frequency detail preserved). The reference is
+ *     given a mild bias so the average stays crisp without losing the noise
+ *     reduction that only multi-frame averaging can give.
+ *  4. Robust weights gate every contribution: alignment confidence (patch
+ *     match cost) and a radiance/deghosting weight (color similarity to the
+ *     reference), so moving objects and misaligned regions do not ghost.
  */
 object SuperResZoom {
 
     private const val TAG = "SuperResZoom"
-    private const val MAX_INPUT_DIM = 1920
+    private const val MAX_INPUT_DIM = 2400
     private const val MAX_OUTPUT_DIM = 2880
 
     // Local motion estimation
@@ -55,16 +54,16 @@ object SuperResZoom {
     private const val TAPS = (KERNEL_HALF * 2 + 1) * (KERNEL_HALF * 2 + 1)
     private const val NUM_ANGLE_BINS = 32
     private const val ANISO_LEVELS = 16
-    private const val SIGMA_BASE = 0.6f
-    private const val ALONG_BOOST = 0.6f
-    private const val ACROSS_DROP = 0.5f
+    private const val SIGMA_BASE = 0.7f
+    private const val ALONG_BOOST = 0.8f
+    private const val ACROSS_DROP = 0.55f
     private const val MIN_KERNEL = 0.02f
-    // The sharpest frame is splatted at its exact position with extra weight so
-    // the output can never regress to a blurry average of misaligned frames.
-    private const val REFERENCE_WEIGHT = 2.5f
+    // Mild bias toward the (sharpest) reference so the fused average stays
+    // crisp, while all frames still average through the kernel for noise.
+    private const val REFERENCE_WEIGHT = 1.3f
 
     // Robustness weights
-    private const val COST_SIGMA = 6f
+    private const val COST_SIGMA = 5f
     private const val RADIANCE_SIGMA = 35f
     private const val MIN_CONF = 0.02f
 
@@ -196,35 +195,28 @@ object SuperResZoom {
 
                     for (fi in 0 until count) {
                         val fp = framePix[fi]
-
-                        // Reference frame: splat at its exact position with extra
-                        // weight so the output can never be blurrier than the best
-                        // single frame. Other frames supply denoising + sub-pixel
-                        // detail on top of it.
-                        if (fi == 0) {
-                            val wgt = REFERENCE_WEIGHT
-                            val c = sampleBilinear(fp, w, h, px, py)
-                            sR += ((c ushr 16) and 0xFF) * wgt
-                            sG += ((c ushr 8) and 0xFF) * wgt
-                            sB += (c and 0xFF) * wgt
-                            sWt += wgt
-                            continue
+                        var fx = px
+                        var fy = py
+                        var conf = 1f
+                        if (fi > 0) {
+                            val m = sampleMotion(motionX[fi - 1], motionY[fi - 1], motionCost[fi - 1], cols, rows, px, py)
+                            fx += m.first
+                            fy += m.second
+                            val cr = m.third
+                            conf = frameConf[fi] * exp(-cr * cr * confNorm)
+                            if (conf < MIN_CONF) continue
                         }
 
-                        val m = sampleMotion(motionX[fi - 1], motionY[fi - 1], motionCost[fi - 1], cols, rows, px, py)
-                        val fx = px + m.first
-                        val fy = py + m.second
-                        val cr = m.third
-                        val conf = frameConf[fi] * exp(-cr * cr * confNorm)
-                        if (conf < MIN_CONF) continue
+                        var deghost = 1f
+                        if (fi > 0) {
+                            val fc = sampleBilinear(fp, w, h, fx, fy)
+                            val dr = rr - ((fc ushr 16) and 0xFF)
+                            val dg = rg - ((fc ushr 8) and 0xFF)
+                            val db = rb - (fc and 0xFF)
+                            deghost = exp(-(dr * dr + dg * dg + db * db) * radNorm)
+                        }
 
-                        val fc = sampleBilinear(fp, w, h, fx, fy)
-                        val dr = rr - ((fc ushr 16) and 0xFF)
-                        val dg = rg - ((fc ushr 8) and 0xFF)
-                        val db = rb - (fc and 0xFF)
-                        val deghost = exp(-(dr * dr + dg * dg + db * db) * radNorm)
-
-                        val wMul = conf * deghost
+                        val wMul = conf * deghost * (if (fi == 0) REFERENCE_WEIGHT else 1f)
                         if (wMul < MIN_CONF) continue
 
                         val gf = gain[fi]
@@ -703,29 +695,46 @@ object SuperResZoom {
         return if (counted > 0) score / counted else 0f
     }
 
-    /** Mean Sobel gradient magnitude - used to pick the sharpest reference frame. */
+    /**
+     * Noise-robust sharpness - used to pick the reference frame. Gradients are
+     * measured on a 3x3 box-blurred luminance so sensor noise (which looks like
+     * detail to a raw gradient metric) does not win the selection.
+     */
     private fun sharpness(pix: IntArray, w: Int, h: Int): Float {
+        val n = w * h
+        val lumaArr = IntArray(n)
+        for (i in 0 until n) lumaArr[i] = luma(pix[i])
+        val blurred = IntArray(n)
+        for (y in 1 until h - 1) {
+            val ro = y * w
+            for (x in 1 until w - 1) {
+                val idx = ro + x
+                blurred[idx] = (lumaArr[idx - w - 1] + lumaArr[idx - w] + lumaArr[idx - w + 1] +
+                    lumaArr[idx - 1] + lumaArr[idx] + lumaArr[idx + 1] +
+                    lumaArr[idx + w - 1] + lumaArr[idx + w] + lumaArr[idx + w + 1]) / 9
+            }
+        }
         var sum = 0f
-        var n = 0
+        var count = 0
         for (y in 1 until h - 1 step 4) {
             val ro = y * w
             for (x in 1 until w - 1 step 4) {
                 val idx = ro + x
-                val tl = luma(pix[idx - w - 1]).toFloat()
-                val tc = luma(pix[idx - w]).toFloat()
-                val tr = luma(pix[idx - w + 1]).toFloat()
-                val ml = luma(pix[idx - 1]).toFloat()
-                val mr = luma(pix[idx + 1]).toFloat()
-                val bl = luma(pix[idx + w - 1]).toFloat()
-                val bc = luma(pix[idx + w]).toFloat()
-                val br = luma(pix[idx + w + 1]).toFloat()
+                val tl = blurred[idx - w - 1].toFloat()
+                val tc = blurred[idx - w].toFloat()
+                val tr = blurred[idx - w + 1].toFloat()
+                val ml = blurred[idx - 1].toFloat()
+                val mr = blurred[idx + 1].toFloat()
+                val bl = blurred[idx + w - 1].toFloat()
+                val bc = blurred[idx + w].toFloat()
+                val br = blurred[idx + w + 1].toFloat()
                 val gx = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
                 val gy = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
                 sum += abs(gx) + abs(gy)
-                n++
+                count++
             }
         }
-        return if (n > 0) sum / n else 0f
+        return if (count > 0) sum / count else 0f
     }
 
     private fun meanLuma(pix: IntArray, w: Int, h: Int): Float {

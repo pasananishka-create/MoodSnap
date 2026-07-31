@@ -258,8 +258,9 @@ class CameraViewModel @Inject constructor(
             try {
                 val frames = ArrayList<Bitmap>(filePaths.size)
                 // Decode at the highest resolution that stays memory-safe (long
-                // edge ~1920px) so the merge has real detail to work with.
-                val burstCap = 1920
+                // edge ~2400px, largeHeap enabled) so the merge has real detail
+                // and the final 2880px output is only a modest 1.2x upscale.
+                val burstCap = 2400
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(filePaths.firstOrNull(), bounds)
                 var sampleSize = 1
@@ -320,8 +321,10 @@ class CameraViewModel @Inject constructor(
                         processed = hdResult
                     } else {
                         // Always sharpen super-res output so the multi-frame
-                        // detail is visible even without HD/AI toggles
-                        val sharp = HdEnhancer.enhance(processed, 0.6f)
+                        // detail is visible even without HD/AI toggles. The merge
+                        // now denoises, so a moderate sharpen adds crispness
+                        // without amplifying residual noise into visible grain.
+                        val sharp = HdEnhancer.enhance(processed, 0.45f)
                         processed.recycle()
                         processed = sharp
                     }
