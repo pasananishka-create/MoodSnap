@@ -257,16 +257,26 @@ class CameraViewModel @Inject constructor(
             var mergedBitmap: Bitmap? = null
             try {
                 val frames = ArrayList<Bitmap>(filePaths.size)
+                // Decode at the highest resolution that stays memory-safe (long
+                // edge ~1920px) so the merge has real detail to work with.
+                val burstCap = 1920
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(filePaths.firstOrNull(), bounds)
+                var sampleSize = 1
+                val longSide = maxOf(bounds.outWidth, bounds.outHeight)
+                if (longSide > 0) {
+                    while (longSide / (sampleSize * 2) >= burstCap && sampleSize < 8) sampleSize *= 2
+                }
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
-                    inSampleSize = 2
+                    inSampleSize = sampleSize
                 }
                 for (path in filePaths) {
                     try {
                         val bmp = BitmapFactory.decodeFile(path, options)
                         if (bmp != null) {
-                            if (bmp.width > 1440) {
-                                val scale = 1440f / bmp.width
+                            if (bmp.width > burstCap) {
+                                val scale = burstCap.toFloat() / bmp.width
                                 val nw = (bmp.width * scale).toInt()
                                 val nh = (bmp.height * scale).toInt()
                                 val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
@@ -311,7 +321,7 @@ class CameraViewModel @Inject constructor(
                     } else {
                         // Always sharpen super-res output so the multi-frame
                         // detail is visible even without HD/AI toggles
-                        val sharp = HdEnhancer.enhance(processed, 0.4f)
+                        val sharp = HdEnhancer.enhance(processed, 0.6f)
                         processed.recycle()
                         processed = sharp
                     }

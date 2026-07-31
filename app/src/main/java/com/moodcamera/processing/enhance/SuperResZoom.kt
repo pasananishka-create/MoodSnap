@@ -25,18 +25,21 @@ import kotlin.math.sqrt
  *     block matching (quarter-scale search + full-res refine + parabolic
  *     sub-pixel fit). Unlike a single global translation, this handles the
  *     per-patch offsets produced by hand shake, parallax and rolling shutter.
- *  3. Frames are merged directly onto a higher-resolution grid. The merge
- *     kernel is an ANISOTROPIC GAUSSIAN steered by the local structure tensor:
- *     wide along edges (noise averaging) and narrow across them (high-frequency
- *     detail preserved). Flat regions fall back to a small isotropic kernel.
- *  4. Robust weights gate every contribution: alignment confidence (patch
- *     match cost) and a radiance/deghosting weight (color similarity to the
- *     reference), so moving objects and misaligned regions do not ghost.
+ *  3. The sharpest frame is splatted at its exact sub-pixel position with extra
+ *     weight, so the output is never blurrier than the best single frame. Other
+ *     frames are fused with an ANISOTROPIC GAUSSIAN kernel steered by the local
+ *     structure tensor: wide along edges (noise averaging) and narrow across
+ *     them (high-frequency detail preserved). Flat regions fall back to a small
+ *     isotropic kernel.
+ *  4. Robust weights gate every contribution from non-reference frames:
+ *     alignment confidence (patch match cost) and a radiance/deghosting weight
+ *     (color similarity to the reference), so moving objects and misaligned
+ *     regions do not ghost.
  */
 object SuperResZoom {
 
     private const val TAG = "SuperResZoom"
-    private const val MAX_INPUT_DIM = 1440
+    private const val MAX_INPUT_DIM = 1920
     private const val MAX_OUTPUT_DIM = 2880
 
     // Local motion estimation
@@ -52,13 +55,16 @@ object SuperResZoom {
     private const val TAPS = (KERNEL_HALF * 2 + 1) * (KERNEL_HALF * 2 + 1)
     private const val NUM_ANGLE_BINS = 32
     private const val ANISO_LEVELS = 16
-    private const val SIGMA_BASE = 0.85f
-    private const val ALONG_BOOST = 0.45f
+    private const val SIGMA_BASE = 0.6f
+    private const val ALONG_BOOST = 0.6f
     private const val ACROSS_DROP = 0.5f
     private const val MIN_KERNEL = 0.02f
+    // The sharpest frame is splatted at its exact position with extra weight so
+    // the output can never regress to a blurry average of misaligned frames.
+    private const val REFERENCE_WEIGHT = 2.5f
 
     // Robustness weights
-    private const val COST_SIGMA = 8f
+    private const val COST_SIGMA = 6f
     private const val RADIANCE_SIGMA = 35f
     private const val MIN_CONF = 0.02f
 
@@ -190,26 +196,33 @@ object SuperResZoom {
 
                     for (fi in 0 until count) {
                         val fp = framePix[fi]
-                        var fx = px
-                        var fy = py
-                        var conf = 1f
-                        if (fi > 0) {
-                            val m = sampleMotion(motionX[fi - 1], motionY[fi - 1], motionCost[fi - 1], cols, rows, px, py)
-                            fx += m.first
-                            fy += m.second
-                            val cr = m.third
-                            conf = frameConf[fi] * exp(-cr * cr * confNorm)
-                            if (conf < MIN_CONF) continue
+
+                        // Reference frame: splat at its exact position with extra
+                        // weight so the output can never be blurrier than the best
+                        // single frame. Other frames supply denoising + sub-pixel
+                        // detail on top of it.
+                        if (fi == 0) {
+                            val wgt = REFERENCE_WEIGHT
+                            val c = sampleBilinear(fp, w, h, px, py)
+                            sR += ((c ushr 16) and 0xFF) * wgt
+                            sG += ((c ushr 8) and 0xFF) * wgt
+                            sB += (c and 0xFF) * wgt
+                            sWt += wgt
+                            continue
                         }
 
-                        var deghost = 1f
-                        if (fi > 0) {
-                            val fc = sampleBilinear(fp, w, h, fx, fy)
-                            val dr = rr - ((fc ushr 16) and 0xFF)
-                            val dg = rg - ((fc ushr 8) and 0xFF)
-                            val db = rb - (fc and 0xFF)
-                            deghost = exp(-(dr * dr + dg * dg + db * db) * radNorm)
-                        }
+                        val m = sampleMotion(motionX[fi - 1], motionY[fi - 1], motionCost[fi - 1], cols, rows, px, py)
+                        val fx = px + m.first
+                        val fy = py + m.second
+                        val cr = m.third
+                        val conf = frameConf[fi] * exp(-cr * cr * confNorm)
+                        if (conf < MIN_CONF) continue
+
+                        val fc = sampleBilinear(fp, w, h, fx, fy)
+                        val dr = rr - ((fc ushr 16) and 0xFF)
+                        val dg = rg - ((fc ushr 8) and 0xFF)
+                        val db = rb - (fc and 0xFF)
+                        val deghost = exp(-(dr * dr + dg * dg + db * db) * radNorm)
 
                         val wMul = conf * deghost
                         if (wMul < MIN_CONF) continue
@@ -297,8 +310,8 @@ object SuperResZoom {
                 var quarterUsed = false
                 if (sw >= SMALL_HALF * 2 + 1 && sh >= SMALL_HALF * 2 + 1) {
                     quarterUsed = true
-                    val bqx = scx - Math.round(baseX / 4f)
-                    val bqy = scy - Math.round(baseY / 4f)
+                    val bqx = scx + Math.round(baseX / 4f)
+                    val bqy = scy + Math.round(baseY / 4f)
                     for (dy in -SEARCH_Q..SEARCH_Q) {
                         for (dx in -SEARCH_Q..SEARCH_Q) {
                             val sad = smallSad(refS, frameS, sw, sh, scx, scy, bqx + dx, bqy + dy)
