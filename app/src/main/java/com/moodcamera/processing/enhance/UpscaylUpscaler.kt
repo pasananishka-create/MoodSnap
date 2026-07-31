@@ -66,17 +66,67 @@ object UpscaylUpscaler {
 
             val modelBytes = withContext(Dispatchers.IO) { modelFile.readBytes() }
             ortEnv = OrtEnvironment.getEnvironment()
-            val options = OrtSession.SessionOptions().apply {
-                try { addNnapi() } catch (_: Exception) {}
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+
+            // Prefer the NNAPI delegate, but many device NNAPI drivers cannot
+            // run this model, so verify with a real inference and fall back to
+            // CPU if the driver errors or produces a degenerate result.
+            session = try {
+                val nnapiOptions = OrtSession.SessionOptions().apply {
+                    try { addNnapi() } catch (_: Exception) {}
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                }
+                val s = ortEnv!!.createSession(modelBytes, nnapiOptions)
+                try {
+                    sanityCheckSession(s, ortEnv!!)
+                } catch (e: Throwable) {
+                    try { s.close() } catch (_: Exception) {}
+                    throw e
+                }
+                Log.i("UpscaylUpscaler", "AI model loaded with NNAPI acceleration")
+                s
+            } catch (e: Throwable) {
+                Log.w("UpscaylUpscaler", "NNAPI session failed (${e.message}); retrying on CPU")
+                val cpuOptions = OrtSession.SessionOptions().apply {
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    try {
+                        setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() - 1))
+                    } catch (_: Exception) {}
+                }
+                ortEnv!!.createSession(modelBytes, cpuOptions).also {
+                    Log.i("UpscaylUpscaler", "AI model loaded on CPU (${it.inputNames})")
+                }
             }
-            session = ortEnv!!.createSession(modelBytes, options)
-            Log.i("UpscaylUpscaler", "AI model loaded successfully")
-        } catch (e: Exception) {
+            lastError = null
+        } catch (e: Throwable) {
             Log.e("UpscaylUpscaler", "Init failed: ${e.message}", e)
             lastError = e.message
             session = null
             initFailed = true
+        }
+    }
+
+    private fun sanityCheckSession(sess: OrtSession, env: OrtEnvironment) {
+        val n = TILE_SIZE * TILE_SIZE
+        val floats = FloatArray(3 * n) { 0.5f }
+        val shape = longArrayOf(1, 3, TILE_SIZE.toLong(), TILE_SIZE.toLong())
+        val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), shape)
+        try {
+            val results = sess.run(Collections.singletonMap(sess.inputNames.first(), tensor))
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val output = results[0].value as Array<Array<Array<FloatArray>>>
+                val outH = output[0][0].size
+                val outW = output[0][0][0].size
+                if (outH != TILE_SIZE * SCALE || outW != TILE_SIZE * SCALE) {
+                    throw IllegalStateException("Unexpected output shape ${outW}x$outH")
+                }
+                val c = output[0][0][0][0]
+                if (!c.isFinite()) throw IllegalStateException("Non-finite output")
+            } finally {
+                results.close()
+            }
+        } finally {
+            tensor.close()
         }
     }
 
@@ -86,6 +136,8 @@ object UpscaylUpscaler {
         session = null
         ortEnv = null
         initStarted = false
+        initFailed = false
+        lastError = null
     }
 
     fun isReady(): Boolean = session != null

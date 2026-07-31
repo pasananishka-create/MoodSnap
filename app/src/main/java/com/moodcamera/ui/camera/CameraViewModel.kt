@@ -270,9 +270,9 @@ class CameraViewModel @Inject constructor(
                     }
                 }
                 if (!UpscaylUpscaler.isReady()) {
-                    android.util.Log.e("MoodSnap", "AI upscale unavailable: ${UpscaylUpscaler.getLastError()}")
-                    _uiState.update { it.copy(errorMessage = "AI upscale unavailable: ${UpscaylUpscaler.getLastError() ?: "model load failed"}") }
-                    return@withContext
+                    // Never abort - upscale() degrades to a basic 2x upscale so a
+                    // photo always gets saved. Log the real cause for diagnosis.
+                    android.util.Log.w("MoodSnap", "AI upscaler not ready (${UpscaylUpscaler.getLastError()}); using basic upscale fallback")
                 }
 
                 // Decode the burst at the AI working size and keep the sharpest
@@ -333,6 +333,7 @@ class CameraViewModel @Inject constructor(
                     }
                 }
                 bestBmp.recycle()
+                android.util.Log.i("MoodSnap", "Super Res upscale result: ${resultBitmap?.width}x${resultBitmap?.height} (AI ready: ${UpscaylUpscaler.isReady()})")
 
                 if (resultBitmap != null) {
                     _uiState.update { it.copy(superResStatus = "Super Res: enhancing...") }
