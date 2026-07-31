@@ -23,11 +23,11 @@ object ImageProcessor {
 
     private const val MAX_DIMENSION = 2400
 
-    fun downscaleIfNeeded(bitmap: Bitmap): Bitmap {
+    fun downscaleIfNeeded(bitmap: Bitmap, maxDimension: Int = MAX_DIMENSION): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
-        if (w <= MAX_DIMENSION && h <= MAX_DIMENSION) return bitmap
-        val scale = MAX_DIMENSION.toFloat() / maxOf(w, h)
+        if (w <= maxDimension && h <= maxDimension) return bitmap
+        val scale = maxDimension.toFloat() / maxOf(w, h)
         val newW = (w * scale).roundToInt()
         val newH = (h * scale).roundToInt()
         val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
@@ -38,10 +38,11 @@ object ImageProcessor {
     fun processImage(
         original: Bitmap,
         settings: CameraSettings,
-        quality: QualityType
+        quality: QualityType,
+        maxDimension: Int = MAX_DIMENSION
     ): Bitmap {
         val copy = original.copy(Bitmap.Config.ARGB_8888, true)
-        val src = downscaleIfNeeded(copy)
+        val src = downscaleIfNeeded(copy, maxDimension)
         if (src !== copy) copy.recycle()
 
         val width = src.width

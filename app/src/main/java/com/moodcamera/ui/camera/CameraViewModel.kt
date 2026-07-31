@@ -259,14 +259,14 @@ class CameraViewModel @Inject constructor(
                 val frames = ArrayList<Bitmap>(filePaths.size)
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
-                    inSampleSize = 1
+                    inSampleSize = 2
                 }
                 for (path in filePaths) {
                     try {
                         val bmp = BitmapFactory.decodeFile(path, options)
                         if (bmp != null) {
-                            if (bmp.width > 1200) {
-                                val scale = 1200f / bmp.width
+                            if (bmp.width > 1440) {
+                                val scale = 1440f / bmp.width
                                 val nw = (bmp.width * scale).toInt()
                                 val nh = (bmp.height * scale).toInt()
                                 val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
@@ -289,10 +289,13 @@ class CameraViewModel @Inject constructor(
                 if (mergedBitmap != null) {
                     _uiState.update { it.copy(superResStatus = "Super Res: enhancing...") }
                     val settings = _uiState.value.settings
+                    // Keep up to 2880px so the merged result stays bigger than
+                    // a normal 2400px capture
                     var processed = ImageProcessor.processImage(
                         original = mergedBitmap!!,
                         settings = settings,
-                        quality = settings.qualityType
+                        quality = settings.qualityType,
+                        maxDimension = 2880
                     )
                     if (mergedBitmap !== processed) mergedBitmap!!.recycle()
                     mergedBitmap = null
@@ -305,6 +308,12 @@ class CameraViewModel @Inject constructor(
                         val hdResult = HdEnhancer.enhance(processed, settings.hdIntensity)
                         processed.recycle()
                         processed = hdResult
+                    } else {
+                        // Always sharpen super-res output so the multi-frame
+                        // detail is visible even without HD/AI toggles
+                        val sharp = HdEnhancer.enhance(processed, 0.4f)
+                        processed.recycle()
+                        processed = sharp
                     }
 
                     val finalBitmap = processed

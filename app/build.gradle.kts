@@ -14,8 +14,8 @@ android {
         applicationId = "com.moodcamera"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.6.0"
+        versionCode = 15
+        versionName = "1.6.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")

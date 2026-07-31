@@ -1,31 +1,29 @@
 package com.moodcamera.processing.enhance
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Matrix
-import android.graphics.Paint
 import android.util.Log
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.min
 
 /**
  * Super Res Zoom - mimics Google Pixel's multi-frame super-resolution zoom.
  *
- * Instead of plain digital zoom (which just crops and upscales one frame),
- * this captures a burst of frames and merges them using the tiny sub-pixel
- * offsets created by natural hand shake. The overlapping samples are fused
- * into a sharper, higher-resolution image - exactly the technique Pixel uses.
+ * Real super-resolution: each burst frame is sampled at slightly different
+ * sub-pixel positions (from natural hand shake). Frames are aligned to
+ * sub-pixel precision and splatted onto a finer grid at their ACTUAL
+ * fractional positions, recovering detail beyond single-frame resolution.
  */
 object SuperResZoom {
 
     private const val TAG = "SuperResZoom"
-    private const val MERGE_SCALE = 2
-    private const val MAX_SR_DIM = 2400
+    private const val MAX_INPUT_DIM = 1440
+    private const val MAX_OUTPUT_DIM = 2880
 
     /**
      * Merges a burst of frames into a single higher-resolution image.
-     * Frames must all be the same size. Returns null if the merge fails.
+     * Frames must all be the same size. Returns null on failure.
      */
     fun mergeBurst(frames: List<Bitmap>): Bitmap? {
         if (frames.isEmpty()) return null
@@ -34,46 +32,78 @@ object SuperResZoom {
         val ref = frames[0]
         val w = ref.width
         val h = ref.height
+        if (w < 16 || h < 16) return frames[0]
 
-        val outW = min(w * MERGE_SCALE, MAX_SR_DIM)
-        val ratio = outW.toFloat() / (w * MERGE_SCALE)
-        val outH = (h * MERGE_SCALE * ratio).toInt()
+        val scale = min(2.0, MAX_OUTPUT_DIM.toDouble() / maxOf(w, h))
+        val outW = (w * scale).toInt()
+        val outH = (h * scale).toInt()
 
-        // Align every frame to the reference
-        val aligned = ArrayList<Bitmap>(frames.size)
-        aligned.add(ref.copy(Bitmap.Config.ARGB_8888, false))
+        // Precompute pixel buffers + sub-pixel offsets for every frame
+        val refPix = IntArray(w * h)
+        ref.getPixels(refPix, 0, w, 0, 0, w, h)
+
+        val framePix = ArrayList<IntArray>(frames.size)
+        val offsetsX = FloatArray(frames.size)
+        val offsetsY = FloatArray(frames.size)
+        framePix.add(refPix)
         for (i in 1 until frames.size) {
-            val (dx, dy) = alignFrames(ref, frames[i])
-            aligned.add(shiftFrame(frames[i], dx, dy, w, h))
+            val fp = IntArray(w * h)
+            frames[i].getPixels(fp, 0, w, 0, 0, w, h)
+            val (dx, dy) = alignSubPixel(refPix, fp, w, h)
+            offsetsX[i] = dx
+            offsetsY[i] = dy
+            framePix.add(fp)
         }
 
-        // Stack aligned frames into a 2x accumulator (averaging reduces noise,
-        // sub-pixel offsets recover detail beyond single-frame resolution)
+        // Accumulators (RGB summed + count) at output resolution
         val acc = FloatArray(outW * outH * 3)
-        val counts = IntArray(outW * outH)
+        val counts = FloatArray(outW * outH)
 
-        val srcPixels = IntArray(w * h)
-        for (alignedIdx in aligned.indices) {
-            val bmp = aligned[alignedIdx]
-            bmp.getPixels(srcPixels, 0, w, 0, 0, w, h)
+        for (fi in frames.indices) {
+            val fp = framePix[fi]
+            val dx = offsetsX[fi]
+            val dy = offsetsY[fi]
+
             for (y in 0 until h) {
-                val dstY = (y * MERGE_SCALE * ratio).toInt().coerceIn(0, outH - 1)
-                val dstY2 = min(dstY + 1, outH - 1)
+                val gy = (y + dy) * scale.toFloat()
+                val y0 = floor(gy).toInt()
+                val fy = (gy - y0).coerceIn(0f, 1f)
+                if (y0 < 0 || y0 >= outH) continue
+
                 for (x in 0 until w) {
-                    val dstX = (x * MERGE_SCALE * ratio).toInt().coerceIn(0, outW - 1)
-                    val dstX2 = min(dstX + 1, outW - 1)
-                    val px = srcPixels[y * w + x]
+                    val px = fp[y * w + x]
                     val r = Color.red(px).toFloat()
                     val g = Color.green(px).toFloat()
                     val b = Color.blue(px).toFloat()
 
-                    for (corner in 0 until 4) {
-                        val ox = if (corner and 1 == 0) dstX else dstX2
-                        val oy = if (corner and 2 == 0) dstY else dstY2
-                        val o = (oy * outW + ox) * 3
-                        acc[o] += r; acc[o + 1] += g; acc[o + 2] += b
-                        counts[oy * outW + ox]++
-                    }
+                    val gx = (x + dx) * scale.toFloat()
+                    val x0 = floor(gx).toInt()
+                    val fx = (gx - x0).coerceIn(0f, 1f)
+                    if (x0 < 0 || x0 >= outW) continue
+
+                    val x1 = min(x0 + 1, outW - 1)
+                    val y1 = min(y0 + 1, outH - 1)
+
+                    val wx00 = (1f - fx) * (1f - fy)
+                    val wx10 = fx * (1f - fy)
+                    val wx01 = (1f - fx) * fy
+                    val wx11 = fx * fy
+
+                    var o = (y0 * outW + x0) * 3
+                    acc[o] += r * wx00; acc[o + 1] += g * wx00; acc[o + 2] += b * wx00
+                    counts[y0 * outW + x0] += wx00
+
+                    o = (y0 * outW + x1) * 3
+                    acc[o] += r * wx10; acc[o + 1] += g * wx10; acc[o + 2] += b * wx10
+                    counts[y0 * outW + x1] += wx10
+
+                    o = (y1 * outW + x0) * 3
+                    acc[o] += r * wx01; acc[o + 1] += g * wx01; acc[o + 2] += b * wx01
+                    counts[y1 * outW + x0] += wx01
+
+                    o = (y1 * outW + x1) * 3
+                    acc[o] += r * wx11; acc[o + 1] += g * wx11; acc[o + 2] += b * wx11
+                    counts[y1 * outW + x1] += wx11
                 }
             }
         }
@@ -88,7 +118,7 @@ object SuperResZoom {
         val outPixels = IntArray(outW * outH)
         for (i in outPixels.indices) {
             val c = counts[i]
-            if (c > 0) {
+            if (c > 0.001f) {
                 val o = i * 3
                 outPixels[i] = Color.rgb(
                     (acc[o] / c).toInt().coerceIn(0, 255),
@@ -99,27 +129,15 @@ object SuperResZoom {
         }
         result.setPixels(outPixels, 0, outW, 0, 0, outW, outH)
 
-        // Recycle aligned copies (not the originals - caller owns those)
-        for (i in 1 until aligned.size) aligned[i].recycle()
-
         return result
     }
 
     /**
-     * Aligns [frame] to [ref] using coarse-to-fine block matching.
-     * Returns the integer pixel offset (dx, dy) to shift [frame] so it
-     * matches [ref].
+     * Coarse-to-fine sub-pixel alignment of [framePix] to [refPix].
+     * Returns the fractional pixel offset (dx, dy) to add to frame pixels
+     * so they line up with the reference.
      */
-    fun alignFrames(ref: Bitmap, frame: Bitmap): Pair<Int, Int> {
-        val w = min(ref.width, frame.width)
-        val h = min(ref.height, frame.height)
-        if (w < 16 || h < 16) return 0 to 0
-
-        val refPix = IntArray(w * h)
-        val framePix = IntArray(w * h)
-        ref.getPixels(refPix, 0, w, 0, 0, w, h)
-        frame.getPixels(framePix, 0, w, 0, 0, w, h)
-
+    fun alignSubPixel(refPix: IntArray, framePix: IntArray, w: Int, h: Int): Pair<Float, Float> {
         // Coarse search at 1/4 scale
         val cw = w / 4
         val ch = h / 4
@@ -183,23 +201,46 @@ object SuperResZoom {
             }
         }
 
-        return fx to fy
+        // Sub-pixel refinement: parabolic fit on the SAD curve around best x
+        val sadXm1 = sadAt(refPix, framePix, w, h, fx - 1, fy, 128)
+        val sadX0 = sadAt(refPix, framePix, w, h, fx, fy, 128)
+        val sadXp1 = sadAt(refPix, framePix, w, h, fx + 1, fy, 128)
+        var subX = 0f
+        val denomX = sadXm1 - 2f * sadX0 + sadXp1
+        if (abs(denomX) > 0.001f) {
+            subX = 0.5f * (sadXm1 - sadXp1) / denomX
+            subX = subX.coerceIn(-0.75f, 0.75f)
+        }
+
+        val sadYm1 = sadAt(refPix, framePix, w, h, fx, fy - 1, 128)
+        val sadY0 = sadAt(refPix, framePix, w, h, fx, fy, 128)
+        val sadYp1 = sadAt(refPix, framePix, w, h, fx, fy + 1, 128)
+        var subY = 0f
+        val denomY = sadYm1 - 2f * sadY0 + sadYp1
+        if (abs(denomY) > 0.001f) {
+            subY = 0.5f * (sadYm1 - sadYp1) / denomY
+            subY = subY.coerceIn(-0.75f, 0.75f)
+        }
+
+        return (fx + subX) to (fy + subY)
+    }
+
+    private fun sadAt(ref: IntArray, frame: IntArray, w: Int, h: Int, dx: Int, dy: Int, step: Int): Float {
+        var score = 0f
+        var counted = 0
+        val margin = 96
+        for (y in margin until h - margin step step) {
+            val ry = (y + dy).coerceIn(0, h - 1)
+            for (x in margin until w - margin step step) {
+                val rx = (x + dx).coerceIn(0, w - 1)
+                score += abs(luma(ref[y * w + x]) - luma(frame[ry * w + rx]))
+                counted++
+            }
+        }
+        return if (counted > 0) score / counted else 0f
     }
 
     private fun luma(px: Int): Int {
         return (Color.red(px) * 299 + Color.green(px) * 587 + Color.blue(px) * 114) / 1000
-    }
-
-    private fun shiftFrame(frame: Bitmap, dx: Int, dy: Int, w: Int, h: Int): Bitmap {
-        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-        if (dx != 0 || dy != 0) {
-            val matrix = Matrix().apply { postTranslate(-dx.toFloat(), -dy.toFloat()) }
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-            canvas.drawBitmap(frame, matrix, paint)
-        } else {
-            canvas.drawBitmap(frame, 0f, 0f, null)
-        }
-        return result
     }
 }
