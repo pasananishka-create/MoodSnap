@@ -3,17 +3,35 @@ package com.moodcamera.processing.enhance
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.util.Log
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
- * Super Res Zoom - mimics Google Pixel's multi-frame super-resolution zoom.
+ * Super Res Zoom - faithful implementation of the multi-frame super-resolution
+ * merge used by Google's Pixel "Super Res Zoom" (Wronski et al., SIGGRAPH 2019,
+ * "Handheld Multi-Frame Super-Resolution").
  *
- * Real super-resolution: each burst frame is sampled at slightly different
- * sub-pixel positions (from natural hand shake). Frames are aligned to
- * sub-pixel precision and splatted onto a finer grid at their ACTUAL
- * fractional positions, recovering detail beyond single-frame resolution.
+ * Pipeline:
+ *  1. The sharpest burst frame is chosen as the reference.
+ *  2. LOCAL sub-pixel motion is estimated for every frame via coarse-to-fine
+ *     block matching (quarter-scale search + full-res refine + parabolic
+ *     sub-pixel fit). Unlike a single global translation, this handles the
+ *     per-patch offsets produced by hand shake, parallax and rolling shutter.
+ *  3. Frames are merged directly onto a higher-resolution grid. The merge
+ *     kernel is an ANISOTROPIC GAUSSIAN steered by the local structure tensor:
+ *     wide along edges (noise averaging) and narrow across them (high-frequency
+ *     detail preserved). Flat regions fall back to a small isotropic kernel.
+ *  4. Robust weights gate every contribution: alignment confidence (patch
+ *     match cost) and a radiance/deghosting weight (color similarity to the
+ *     reference), so moving objects and misaligned regions do not ghost.
  */
 object SuperResZoom {
 
@@ -21,10 +39,29 @@ object SuperResZoom {
     private const val MAX_INPUT_DIM = 1440
     private const val MAX_OUTPUT_DIM = 2880
 
-    /**
-     * Merges a burst of frames into a single higher-resolution image.
-     * Frames must all be the same size. Returns null on failure.
-     */
+    // Local motion estimation
+    private const val PATCH = 32
+    private const val PATCH_HALF = PATCH / 2
+    private const val SEARCH_Q = 4            // quarter-px search radius (-> 16 source px)
+    private const val SMALL_HALF = 4          // 8x8 window at quarter scale == 32px patch
+    private const val REFINE_SEARCH = 2       // full-res integer refine radius
+    private const val SAD_STRIDE = 2
+
+    // Anisotropic merge kernel
+    private const val KERNEL_HALF = 2
+    private const val TAPS = (KERNEL_HALF * 2 + 1) * (KERNEL_HALF * 2 + 1)
+    private const val NUM_ANGLE_BINS = 32
+    private const val ANISO_LEVELS = 16
+    private const val SIGMA_BASE = 0.85f
+    private const val ALONG_BOOST = 0.45f
+    private const val ACROSS_DROP = 0.5f
+    private const val MIN_KERNEL = 0.02f
+
+    // Robustness weights
+    private const val COST_SIGMA = 8f
+    private const val RADIANCE_SIGMA = 35f
+    private const val MIN_CONF = 0.02f
+
     fun mergeBurst(frames: List<Bitmap>): Bitmap? {
         if (frames.isEmpty()) return null
         if (frames.size == 1) return frames[0]
@@ -34,78 +71,181 @@ object SuperResZoom {
         val h = ref.height
         if (w < 16 || h < 16) return frames[0]
 
-        val scale = min(2.0, MAX_OUTPUT_DIM.toDouble() / maxOf(w, h))
+        val scale = min(2.0, MAX_OUTPUT_DIM.toDouble() / maxOf(w, h)).toFloat()
         val outW = (w * scale).toInt()
         val outH = (h * scale).toInt()
+        val invScale = 1f / scale
 
-        // Precompute pixel buffers + sub-pixel offsets for every frame
-        val refPix = IntArray(w * h)
-        ref.getPixels(refPix, 0, w, 0, 0, w, h)
-
-        val framePix = ArrayList<IntArray>(frames.size)
-        val offsetsX = FloatArray(frames.size)
-        val offsetsY = FloatArray(frames.size)
-        framePix.add(refPix)
-        for (i in 1 until frames.size) {
-            val fp = IntArray(w * h)
-            frames[i].getPixels(fp, 0, w, 0, 0, w, h)
-            val (dx, dy) = alignSubPixel(refPix, fp, w, h)
-            offsetsX[i] = dx
-            offsetsY[i] = dy
-            framePix.add(fp)
+        val count = frames.size
+        val allPix = ArrayList<IntArray>(count)
+        for (f in frames) {
+            val p = IntArray(w * h)
+            f.getPixels(p, 0, w, 0, 0, w, h)
+            allPix.add(p)
         }
 
-        // Accumulators (RGB summed + count) at output resolution
-        val acc = FloatArray(outW * outH * 3)
-        val counts = FloatArray(outW * outH)
+        // Pick the sharpest frame as the reference.
+        var refIdx = 0
+        var bestSharp = -1f
+        for (i in allPix.indices) {
+            val s = sharpness(allPix[i], w, h)
+            if (s > bestSharp) { bestSharp = s; refIdx = i }
+        }
+        val order = IntArray(count)
+        var k = 0
+        order[k++] = refIdx
+        for (i in allPix.indices) if (i != refIdx) order[k++] = i
 
-        for (fi in frames.indices) {
-            val fp = framePix[fi]
-            val dx = offsetsX[fi]
-            val dy = offsetsY[fi]
+        val framePix = ArrayList<IntArray>(count)
+        for (i in 0 until count) framePix.add(allPix[order[i]])
+        val refPix = framePix[0]
 
-            for (y in 0 until h) {
-                val gy = (y + dy) * scale.toFloat()
-                val y0 = floor(gy).toInt()
-                val fy = (gy - y0).coerceIn(0f, 1f)
-                if (y0 < 0 || y0 >= outH) continue
+        // Global sub-pixel alignment seeds the local patch search.
+        val baseX = FloatArray(count)
+        val baseY = FloatArray(count)
+        for (i in 1 until count) {
+            val (dx, dy) = alignSubPixel(refPix, framePix[i], w, h)
+            baseX[i] = dx
+            baseY[i] = dy
+        }
 
-                for (x in 0 until w) {
-                    val px = fp[y * w + x]
-                    val r = Color.red(px).toFloat()
-                    val g = Color.green(px).toFloat()
-                    val b = Color.blue(px).toFloat()
+        // Per-patch local motion + confidence.
+        val cols = (w + PATCH - 1) / PATCH
+        val rows = (h + PATCH - 1) / PATCH
+        val motionX = ArrayList<FloatArray>(count - 1)
+        val motionY = ArrayList<FloatArray>(count - 1)
+        val motionCost = ArrayList<FloatArray>(count - 1)
+        for (i in 1 until count) {
+            val mx = FloatArray(cols * rows)
+            val my = FloatArray(cols * rows)
+            val mc = FloatArray(cols * rows)
+            estimatePatchMotion(refPix, framePix[i], w, h, baseX[i], baseY[i], cols, rows, mx, my, mc)
+            motionX.add(mx)
+            motionY.add(my)
+            motionCost.add(mc)
+        }
 
-                    val gx = (x + dx) * scale.toFloat()
-                    val x0 = floor(gx).toInt()
-                    val fx = (gx - x0).coerceIn(0f, 1f)
-                    if (x0 < 0 || x0 >= outW) continue
+        val frameConf = FloatArray(count)
+        val gain = FloatArray(count)
+        frameConf[0] = 1f
+        gain[0] = 1f
+        val refMean = meanLuma(refPix, w, h)
+        for (i in 1 until count) {
+            var s = 0f
+            val c = motionCost[i - 1]
+            for (v in c) s += v
+            val mean = s / c.size
+            val cr = mean / COST_SIGMA
+            frameConf[i] = exp(-cr * cr)
+            val fm = meanLuma(framePix[i], w, h)
+            gain[i] = (if (fm > 1f) refMean / fm else 1f).coerceIn(0.85f, 1.18f)
+        }
 
-                    val x1 = min(x0 + 1, outW - 1)
-                    val y1 = min(y0 + 1, outH - 1)
+        // Structure tensor of the reference -> orientation + anisotropy maps.
+        val angle = ByteArray(w * h)
+        val aniso = ByteArray(w * h)
+        structureTensor(refPix, w, h, angle, aniso)
 
-                    val wx00 = (1f - fx) * (1f - fy)
-                    val wx10 = fx * (1f - fy)
-                    val wx01 = (1f - fx) * fy
-                    val wx11 = fx * fy
+        val kernelTable = buildKernelTables()
+        val tapU = IntArray(TAPS)
+        val tapV = IntArray(TAPS)
+        var t = 0
+        for (ty in -KERNEL_HALF..KERNEL_HALF) {
+            for (tx in -KERNEL_HALF..KERNEL_HALF) {
+                tapU[t] = tx
+                tapV[t] = ty
+                t++
+            }
+        }
 
-                    var o = (y0 * outW + x0) * 3
-                    acc[o] += r * wx00; acc[o + 1] += g * wx00; acc[o + 2] += b * wx00
-                    counts[y0 * outW + x0] += wx00
+        val outPixels = IntArray(outW * outH)
+        val accR = FloatArray(outW * outH)
+        val accG = FloatArray(outW * outH)
+        val accB = FloatArray(outW * outH)
+        val accW = FloatArray(outW * outH)
+        val radNorm = 1f / (2f * RADIANCE_SIGMA * RADIANCE_SIGMA)
+        val confNorm = 1f / (2f * COST_SIGMA * COST_SIGMA)
 
-                    o = (y0 * outW + x1) * 3
-                    acc[o] += r * wx10; acc[o + 1] += g * wx10; acc[o + 2] += b * wx10
-                    counts[y0 * outW + x1] += wx10
+        try {
+            for (Y in 0 until outH) {
+                val py = Y * invScale
+                if (Y % 512 == 0) Log.d(TAG, "merging row $Y/$outH")
+                for (X in 0 until outW) {
+                    val px = X * invScale
+                    val xi = px.toInt().coerceIn(0, w - 1)
+                    val yi = py.toInt().coerceIn(0, h - 1)
+                    val bin = angle[yi * w + xi].toInt() and 0xFF
+                    val aLev = aniso[yi * w + xi].toInt() and 0xFF
+                    val kernBase = (bin * ANISO_LEVELS + aLev) * TAPS
 
-                    o = (y1 * outW + x0) * 3
-                    acc[o] += r * wx01; acc[o + 1] += g * wx01; acc[o + 2] += b * wx01
-                    counts[y1 * outW + x0] += wx01
+                    val refC = sampleBilinear(refPix, w, h, px, py)
+                    val rr = (refC ushr 16) and 0xFF
+                    val rg = (refC ushr 8) and 0xFF
+                    val rb = refC and 0xFF
 
-                    o = (y1 * outW + x1) * 3
-                    acc[o] += r * wx11; acc[o + 1] += g * wx11; acc[o + 2] += b * wx11
-                    counts[y1 * outW + x1] += wx11
+                    var sR = 0f
+                    var sG = 0f
+                    var sB = 0f
+                    var sWt = 0f
+
+                    for (fi in 0 until count) {
+                        val fp = framePix[fi]
+                        var fx = px
+                        var fy = py
+                        var conf = 1f
+                        if (fi > 0) {
+                            val m = sampleMotion(motionX[fi - 1], motionY[fi - 1], motionCost[fi - 1], cols, rows, px, py)
+                            fx += m.first
+                            fy += m.second
+                            val cr = m.third
+                            conf = frameConf[fi] * exp(-cr * cr * confNorm)
+                            if (conf < MIN_CONF) continue
+                        }
+
+                        var deghost = 1f
+                        if (fi > 0) {
+                            val fc = sampleBilinear(fp, w, h, fx, fy)
+                            val dr = rr - ((fc ushr 16) and 0xFF)
+                            val dg = rg - ((fc ushr 8) and 0xFF)
+                            val db = rb - (fc and 0xFF)
+                            deghost = exp(-(dr * dr + dg * dg + db * db) * radNorm)
+                        }
+
+                        val wMul = conf * deghost
+                        if (wMul < MIN_CONF) continue
+
+                        val gf = gain[fi]
+                        for (tt in 0 until TAPS) {
+                            val kw = kernelTable[kernBase + tt]
+                            if (kw < MIN_KERNEL) continue
+                            val tx = fx + tapU[tt] * invScale
+                            val ty = fy + tapV[tt] * invScale
+                            if (tx < 0f || ty < 0f || tx >= w || ty >= h) continue
+                            val c = sampleBilinear(fp, w, h, tx, ty)
+                            val wgt = kw * wMul
+                            sR += ((c ushr 16) and 0xFF) * wgt * gf
+                            sG += ((c ushr 8) and 0xFF) * wgt * gf
+                            sB += (c and 0xFF) * wgt * gf
+                            sWt += wgt
+                        }
+                    }
+
+                    val oi = Y * outW + X
+                    if (sWt > 0.001f) {
+                        outPixels[oi] = Color.argb(
+                            255,
+                            (sR / sWt).roundToInt().coerceIn(0, 255),
+                            (sG / sWt).roundToInt().coerceIn(0, 255),
+                            (sB / sWt).roundToInt().coerceIn(0, 255)
+                        )
+                    } else {
+                        outPixels[oi] = refC
+                    }
                 }
             }
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "OOM during merge", e)
+            return frames[0]
         }
 
         val result = try {
@@ -114,31 +254,343 @@ object SuperResZoom {
             Log.e(TAG, "OOM creating result", e)
             return frames[0]
         }
-
-        val outPixels = IntArray(outW * outH)
-        for (i in outPixels.indices) {
-            val c = counts[i]
-            if (c > 0.001f) {
-                val o = i * 3
-                outPixels[i] = Color.rgb(
-                    (acc[o] / c).toInt().coerceIn(0, 255),
-                    (acc[o + 1] / c).toInt().coerceIn(0, 255),
-                    (acc[o + 2] / c).toInt().coerceIn(0, 255)
-                )
-            }
-        }
         result.setPixels(outPixels, 0, outW, 0, 0, outW, outH)
-
+        Log.d(TAG, "merge done ${w}x$h -> $outW x $outH")
         return result
     }
 
     /**
-     * Coarse-to-fine sub-pixel alignment of [framePix] to [refPix].
-     * Returns the fractional pixel offset (dx, dy) to add to frame pixels
-     * so they line up with the reference.
+     * Per-patch local motion via coarse-to-fine block matching.
+     * Fills [mx]/[my] with the offset to ADD to a reference coordinate to get
+     * the corresponding frame coordinate, and [cost] with the normalized patch
+     * match error (confidence).
      */
-    fun alignSubPixel(refPix: IntArray, framePix: IntArray, w: Int, h: Int): Pair<Float, Float> {
-        // Coarse search at 1/4 scale
+    private fun estimatePatchMotion(
+        refPix: IntArray, framePix: IntArray, w: Int, h: Int,
+        baseX: Float, baseY: Float,
+        cols: Int, rows: Int,
+        mx: FloatArray, my: FloatArray, cost: FloatArray
+    ) {
+        val sw = w / 4
+        val sh = h / 4
+        val refS = IntArray(sw * sh)
+        val frameS = IntArray(sw * sh)
+        for (y in 0 until sh) {
+            val ro = y * 4 * w
+            val so = y * sw
+            for (x in 0 until sw) {
+                refS[so + x] = luma(refPix[ro + x * 4])
+                frameS[so + x] = luma(framePix[ro + x * 4])
+            }
+        }
+
+        for (r in 0 until rows) {
+            val cy = r * PATCH + PATCH_HALF
+            for (c in 0 until cols) {
+                val cx = c * PATCH + PATCH_HALF
+                val scx = cx shr 2
+                val scy = cy shr 2
+
+                var bestM = Float.MAX_VALUE
+                var bestDx = 0
+                var bestDy = 0
+                var quarterUsed = false
+                if (sw >= SMALL_HALF * 2 + 1 && sh >= SMALL_HALF * 2 + 1) {
+                    quarterUsed = true
+                    val bqx = scx - Math.round(baseX / 4f)
+                    val bqy = scy - Math.round(baseY / 4f)
+                    for (dy in -SEARCH_Q..SEARCH_Q) {
+                        for (dx in -SEARCH_Q..SEARCH_Q) {
+                            val sad = smallSad(refS, frameS, sw, sh, scx, scy, bqx + dx, bqy + dy)
+                            if (sad < bestM) { bestM = sad; bestDx = bqx + dx; bestDy = bqy + dy }
+                        }
+                    }
+                } else {
+                    val bx = Math.round(baseX)
+                    val by = Math.round(baseY)
+                    for (dy in -REFINE_SEARCH * 4..REFINE_SEARCH * 4) {
+                        for (dx in -REFINE_SEARCH * 4..REFINE_SEARCH * 4) {
+                            val sad = patchSad(refPix, framePix, w, h, cx, cy, bx + dx, by + dy)
+                            if (sad < bestM) { bestM = sad; bestDx = bx + dx; bestDy = by + dy }
+                        }
+                    }
+                }
+
+                // Convert search result to a full-res offset (frame = ref + m).
+                val estX: Int
+                val estY: Int
+                if (quarterUsed) {
+                    estX = (bestDx - scx) * 4
+                    estY = (bestDy - scy) * 4
+                } else {
+                    estX = bestDx
+                    estY = bestDy
+                }
+
+                // Full-res integer refine.
+                var bestSad = Float.MAX_VALUE
+                var bxr = estX
+                var byr = estY
+                for (dy in -REFINE_SEARCH..REFINE_SEARCH) {
+                    for (dx in -REFINE_SEARCH..REFINE_SEARCH) {
+                        val sad = patchSad(refPix, framePix, w, h, cx, cy, estX + dx, estY + dy)
+                        if (sad < bestSad) { bestSad = sad; bxr = estX + dx; byr = estY + dy }
+                    }
+                }
+
+                // Sub-pixel parabolic refinement on x.
+                val sxm = patchSad(refPix, framePix, w, h, cx, cy, bxr - 1, byr)
+                val sxp = patchSad(refPix, framePix, w, h, cx, cy, bxr + 1, byr)
+                var subX = 0f
+                val denomX = sxm - 2f * bestSad + sxp
+                if (abs(denomX) > 0.001f) {
+                    subX = (0.5f * (sxm - sxp) / denomX).coerceIn(-0.75f, 0.75f)
+                }
+
+                // Sub-pixel parabolic refinement on y.
+                val sym = patchSad(refPix, framePix, w, h, cx, cy, bxr, byr - 1)
+                val syp = patchSad(refPix, framePix, w, h, cx, cy, bxr, byr + 1)
+                var subY = 0f
+                val denomY = sym - 2f * bestSad + syp
+                if (abs(denomY) > 0.001f) {
+                    subY = (0.5f * (sym - syp) / denomY).coerceIn(-0.75f, 0.75f)
+                }
+
+                mx[r * cols + c] = bxr + subX
+                my[r * cols + c] = byr + subY
+                cost[r * cols + c] = bestSad
+            }
+        }
+    }
+
+    /**
+     * Structure tensor of the reference luminance.
+     * Fills [angle] with the gradient orientation bin (0..NUM_ANGLE_BINS-1)
+     * and [aniso] with the anisotropy level (0..ANISO_LEVELS-1).
+     */
+    private fun structureTensor(refPix: IntArray, w: Int, h: Int, angle: ByteArray, aniso: ByteArray) {
+        val n = w * h
+        val lumaArr = IntArray(n)
+        for (i in 0 until n) lumaArr[i] = luma(refPix[i])
+
+        val gx = FloatArray(n)
+        val gy = FloatArray(n)
+        for (y in 1 until h - 1) {
+            val ro = y * w
+            for (x in 1 until w - 1) {
+                val idx = ro + x
+                val tl = lumaArr[idx - w - 1].toFloat()
+                val tc = lumaArr[idx - w].toFloat()
+                val tr = lumaArr[idx - w + 1].toFloat()
+                val ml = lumaArr[idx - 1].toFloat()
+                val mr = lumaArr[idx + 1].toFloat()
+                val bl = lumaArr[idx + w - 1].toFloat()
+                val bc = lumaArr[idx + w].toFloat()
+                val br = lumaArr[idx + w + 1].toFloat()
+                gx[idx] = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
+                gy[idx] = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
+            }
+        }
+
+        val txx = FloatArray(n)
+        val tyy = FloatArray(n)
+        val txy = FloatArray(n)
+        for (y in 1 until h - 1) {
+            val ro = y * w
+            for (x in 1 until w - 1) {
+                val idx = ro + x
+                var sxx = 0f
+                var syy = 0f
+                var sxy = 0f
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        val g = gx[idx + dy * w + dx]
+                        val gg = gy[idx + dy * w + dx]
+                        sxx += g * g
+                        syy += gg * gg
+                        sxy += g * gg
+                    }
+                }
+                txx[idx] = sxx
+                tyy[idx] = syy
+                txy[idx] = sxy
+            }
+        }
+
+        for (i in 0 until n) {
+            val xx = txx[i]
+            val yy = tyy[i]
+            val xy = txy[i]
+            val trace = xx + yy
+            if (trace < 0.01f) {
+                angle[i] = 0
+                aniso[i] = 0
+                continue
+            }
+            val det = sqrt(0.25f * (xx - yy) * (xx - yy) + xy * xy)
+            val l1 = 0.5f * trace + det
+            val l2 = 0.5f * trace - det
+            var theta = 0.5f * atan2(2f * xy, xx - yy)
+            if (theta < 0f) theta += PI.toFloat()
+            val bin = (theta / PI.toFloat() * NUM_ANGLE_BINS).toInt() % NUM_ANGLE_BINS
+            val a = (l1 - l2) / (l1 + l2)
+            angle[i] = bin.toByte()
+            aniso[i] = (a * (ANISO_LEVELS - 1)).roundToInt().coerceIn(0, ANISO_LEVELS - 1).toByte()
+        }
+    }
+
+    /**
+     * Precomputed anisotropic Gaussian kernel weights.
+     * Table index: ((angleBin * ANISO_LEVELS) + anisoLevel) * TAPS + tap.
+     * Tap (du, dv) in output pixels is rotated by the edge orientation and
+     * scaled by sigma_along (along edge, denoising) vs sigma_across (across
+     * edge, detail). theta points along the gradient (across the edge).
+     */
+    private fun buildKernelTables(): FloatArray {
+        val table = FloatArray(NUM_ANGLE_BINS * ANISO_LEVELS * TAPS)
+        for (b in 0 until NUM_ANGLE_BINS) {
+            val theta = (b + 0.5f) * (PI.toFloat() / NUM_ANGLE_BINS)
+            val cosT = cos(theta)
+            val sinT = sin(theta)
+            for (a in 0 until ANISO_LEVELS) {
+                val an = a / (ANISO_LEVELS - 1f)
+                val sAlong = SIGMA_BASE * (1f + ALONG_BOOST * an)
+                val sAcross = SIGMA_BASE * (1f - ACROSS_DROP * an)
+                val sAlong2 = 2f * sAlong * sAlong
+                val sAcross2 = 2f * sAcross * sAcross
+                var t = 0
+                for (ty in -KERNEL_HALF..KERNEL_HALF) {
+                    for (tx in -KERNEL_HALF..KERNEL_HALF) {
+                        // theta points along the gradient (across the edge), so u
+                        // is across the edge (narrow sigma) and v along it (wide).
+                        val u = tx * cosT + ty * sinT
+                        val v = -tx * sinT + ty * cosT
+                        val w = exp(-(u * u / sAcross2 + v * v / sAlong2))
+                        table[((b * ANISO_LEVELS) + a) * TAPS + t] = w
+                        t++
+                    }
+                }
+            }
+        }
+        return table
+    }
+
+    /**
+     * Bilinear interpolation of [mx]/[my]/[cost] patch grids at (x, y).
+     * Returns (motionX, motionY, confidenceCost).
+     */
+    private fun sampleMotion(
+        mx: FloatArray, my: FloatArray, cost: FloatArray,
+        cols: Int, rows: Int, x: Float, y: Float
+    ): Triple<Float, Float, Float> {
+        val gx = (x - PATCH_HALF) / PATCH
+        val gy = (y - PATCH_HALF) / PATCH
+        var j0 = floor(gx).toInt()
+        var i0 = floor(gy).toInt()
+        var fx = gx - j0
+        var fy = gy - i0
+        i0 = i0.coerceIn(0, rows - 1)
+        j0 = j0.coerceIn(0, cols - 1)
+        fx = fx.coerceIn(0f, 1f)
+        fy = fy.coerceIn(0f, 1f)
+        val i1 = min(i0 + 1, rows - 1)
+        val j1 = min(j0 + 1, cols - 1)
+        val w00 = (1f - fx) * (1f - fy)
+        val w01 = (1f - fx) * fy
+        val w10 = fx * (1f - fy)
+        val w11 = fx * fy
+        val i00 = i0 * cols + j0
+        val i01 = i1 * cols + j0
+        val i10 = i0 * cols + j1
+        val i11 = i1 * cols + j1
+        return Triple(
+            mx[i00] * w00 + mx[i01] * w01 + mx[i10] * w10 + mx[i11] * w11,
+            my[i00] * w00 + my[i01] * w01 + my[i10] * w10 + my[i11] * w11,
+            cost[i00] * w00 + cost[i01] * w01 + cost[i10] * w10 + cost[i11] * w11
+        )
+    }
+
+    /** Bilinear sample of a pixel array at (x, y), clamped to bounds. */
+    private fun sampleBilinear(pix: IntArray, w: Int, h: Int, x: Float, y: Float): Int {
+        val xx = x.coerceIn(0f, w - 0.001f)
+        val yy = y.coerceIn(0f, h - 0.001f)
+        val x0 = floor(xx).toInt()
+        val y0 = floor(yy).toInt()
+        val fx = xx - x0
+        val fy = yy - y0
+        val x1 = min(x0 + 1, w - 1)
+        val y1 = min(y0 + 1, h - 1)
+        val p00 = pix[y0 * w + x0]
+        val p10 = pix[y0 * w + x1]
+        val p01 = pix[y1 * w + x0]
+        val p11 = pix[y1 * w + x1]
+        val w00 = (1f - fx) * (1f - fy)
+        val w10 = fx * (1f - fy)
+        val w01 = (1f - fx) * fy
+        val w11 = fx * fy
+        val r = (((p00 ushr 16) and 0xFF) * w00 + ((p10 ushr 16) and 0xFF) * w10 +
+            ((p01 ushr 16) and 0xFF) * w01 + ((p11 ushr 16) and 0xFF) * w11).roundToInt().coerceIn(0, 255)
+        val g = (((p00 ushr 8) and 0xFF) * w00 + ((p10 ushr 8) and 0xFF) * w10 +
+            ((p01 ushr 8) and 0xFF) * w01 + ((p11 ushr 8) and 0xFF) * w11).roundToInt().coerceIn(0, 255)
+        val b = ((p00 and 0xFF) * w00 + (p10 and 0xFF) * w10 +
+            (p01 and 0xFF) * w01 + (p11 and 0xFF) * w11).roundToInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
+    /**
+     * SAD of the ref patch centered at (cx, cy) vs the frame patch shifted by
+     * (dx, dy) at quarter scale. Returns the mean absolute luma difference.
+     */
+    private fun smallSad(
+        refS: IntArray, frameS: IntArray, sw: Int, sh: Int,
+        cx: Int, cy: Int, dx: Int, dy: Int
+    ): Float {
+        var sum = 0
+        var n = 0
+        for (y in (cy - SMALL_HALF)..(cy + SMALL_HALF)) {
+            val sy = y + dy
+            if (sy < 0 || sy >= sh) continue
+            val ro = y * sw
+            val so = sy * sw
+            for (x in (cx - SMALL_HALF)..(cx + SMALL_HALF)) {
+                val sx = x + dx
+                if (sx < 0 || sx >= sw) continue
+                sum += abs(refS[ro + x] - frameS[so + sx])
+                n++
+            }
+        }
+        return if (n > 0) sum.toFloat() / n else Float.MAX_VALUE
+    }
+
+    /**
+     * SAD of the ref patch centered at (cx, cy) vs the frame patch shifted by
+     * (dx, dy) at full resolution (sampled with stride [SAD_STRIDE]).
+     */
+    private fun patchSad(
+        ref: IntArray, frame: IntArray, w: Int, h: Int,
+        cx: Int, cy: Int, dx: Int, dy: Int
+    ): Float {
+        var sum = 0
+        var n = 0
+        val x0 = cx - PATCH_HALF
+        val y0 = cy - PATCH_HALF
+        for (y in y0 until y0 + PATCH step SAD_STRIDE) {
+            val sy = y + dy
+            if (sy < 0 || sy >= h) continue
+            val ro = y * w
+            val so = sy * w
+            for (x in x0 until x0 + PATCH step SAD_STRIDE) {
+                val sx = x + dx
+                if (sx < 0 || sx >= w) continue
+                sum += abs(luma(ref[ro + x]) - luma(frame[so + sx]))
+                n++
+            }
+        }
+        return if (n > 0) sum.toFloat() / n else Float.MAX_VALUE
+    }
+
+    /** Coarse-to-fine sub-pixel alignment of [framePix] to [refPix]. */
+    private fun alignSubPixel(refPix: IntArray, framePix: IntArray, w: Int, h: Int): Pair<Float, Float> {
         val cw = w / 4
         val ch = h / 4
         val refSmall = IntArray(cw * ch)
@@ -175,7 +627,6 @@ object SuperResZoom {
             }
         }
 
-        // Refine at full resolution around coarse estimate
         var fx = bestDx * 4
         var fy = bestDy * 4
         var bestFull = Int.MAX_VALUE
@@ -201,7 +652,6 @@ object SuperResZoom {
             }
         }
 
-        // Sub-pixel refinement: parabolic fit on the SAD curve around best x
         val sadXm1 = sadAt(refPix, framePix, w, h, fx - 1, fy, 128)
         val sadX0 = sadAt(refPix, framePix, w, h, fx, fy, 128)
         val sadXp1 = sadAt(refPix, framePix, w, h, fx + 1, fy, 128)
@@ -238,6 +688,44 @@ object SuperResZoom {
             }
         }
         return if (counted > 0) score / counted else 0f
+    }
+
+    /** Mean Sobel gradient magnitude - used to pick the sharpest reference frame. */
+    private fun sharpness(pix: IntArray, w: Int, h: Int): Float {
+        var sum = 0f
+        var n = 0
+        for (y in 1 until h - 1 step 4) {
+            val ro = y * w
+            for (x in 1 until w - 1 step 4) {
+                val idx = ro + x
+                val tl = luma(pix[idx - w - 1]).toFloat()
+                val tc = luma(pix[idx - w]).toFloat()
+                val tr = luma(pix[idx - w + 1]).toFloat()
+                val ml = luma(pix[idx - 1]).toFloat()
+                val mr = luma(pix[idx + 1]).toFloat()
+                val bl = luma(pix[idx + w - 1]).toFloat()
+                val bc = luma(pix[idx + w]).toFloat()
+                val br = luma(pix[idx + w + 1]).toFloat()
+                val gx = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
+                val gy = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
+                sum += abs(gx) + abs(gy)
+                n++
+            }
+        }
+        return if (n > 0) sum / n else 0f
+    }
+
+    private fun meanLuma(pix: IntArray, w: Int, h: Int): Float {
+        var sum = 0L
+        var n = 0
+        for (y in 0 until h step 4) {
+            val ro = y * w
+            for (x in 0 until w step 4) {
+                sum += luma(pix[ro + x])
+                n++
+            }
+        }
+        return if (n > 0) sum.toFloat() / n else 1f
     }
 
     private fun luma(px: Int): Int {
